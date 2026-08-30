@@ -44,7 +44,7 @@ try {
 
   const cubes = await api.call("/settings/cubes", { headers: admin.headers })
   const names = (cubes.body ?? []).map((c) => c.name)
-  for (const want of ["crm", "crm/contacts", "crm/contracts"]) {
+  for (const want of ["crm", "crm/accounts", "crm/contacts", "crm/contracts"]) {
     if (!names.includes(want)) {
       console.error(`refused: cube "${want}" is not mounted — install crm-pack first (see header).`)
       process.exit(1)
@@ -154,7 +154,101 @@ try {
     `out=${JSON.stringify(out)}`,
   )
 
-  // ---- independence: each cube serves while the other is absent --------------------
+  // ---- accounts (QWB-47): create / get / update, 403, 404, paging, sorting ----------------
+  const anonA = await api.call("/accounts")
+  score.check("accounts requires authentication (401)", anonA.status === 401, `http=${anonA.status}`)
+
+  const forbiddenA = await api.call("/accounts", {
+    method: "POST",
+    headers: reader.headers,
+    body: JSON.stringify({ name: "Refused Reader SRL" }),
+  })
+  score.check("reader cannot create an organization (403)", forbiddenA.status === 403, `http=${forbiddenA.status}`)
+
+  const missingA = await api.call("/accounts/acc_missing", { headers: admin.headers })
+  score.check("missing organization is 404", missingA.status === 404, `http=${missingA.status}`)
+
+  const createdA = await api.call("/accounts", {
+    method: "POST",
+    headers: admin.headers,
+    body: JSON.stringify({
+      name: "Ada Industries SRL",
+      industry: "manufacturing",
+      website: "https://ada.example.com",
+      billingCity: "Iasi",
+      employees: 42,
+    }),
+  })
+  const org = createdA.body
+  score.check(
+    "admin creates an organization",
+    createdA.status === 200 && typeof org?.id === "string" && org.type === "Organization" && org.employees === 42,
+    `http=${createdA.status} id=${org?.id}`,
+  )
+
+  const updatedA = await api.call(`/accounts/${org?.id}`, {
+    method: "PATCH",
+    headers: admin.headers,
+    body: JSON.stringify({ billingCity: "Cluj", rating: "active" }),
+  })
+  score.check(
+    "admin updates an organization (patch keeps the rest)",
+    updatedA.status === 200 && updatedA.body?.billingCity === "Cluj" && updatedA.body?.name === "Ada Industries SRL",
+    `http=${updatedA.status}`,
+  )
+
+  const pageA = await api.call("/accounts?limit=1&sortBy=name", { headers: reader.headers })
+  score.check(
+    "accounts list pages and sorts",
+    pageA.status === 200 && pageA.body?.rows?.length === 1 && pageA.body?.total === 1 && pageA.body?.sortedBy === "name",
+    `http=${pageA.status} sortedBy=${pageA.body?.sortedBy}`,
+  )
+
+  // ---- the relation: accountId on the contact is the one truth -----------------------------
+  const withAccount = await api.call("/contacts", {
+    method: "POST",
+    headers: admin.headers,
+    body: JSON.stringify({ name: "Dan Pop", email: "dan@example.com", accountId: org?.id }),
+  })
+  score.check(
+    "contact created with accountId pointing at an existing organization",
+    withAccount.status === 200 && withAccount.body?.accountId === org?.id,
+    `http=${withAccount.status} accountId=${withAccount.body?.accountId}`,
+  )
+
+  const withoutAccount = await api.call("/contacts", {
+    method: "POST",
+    headers: admin.headers,
+    body: JSON.stringify({ name: "Maria Radu", email: "maria@example.com" }),
+  })
+  score.check(
+    "contact created without accountId comes back null",
+    withoutAccount.status === 200 && withoutAccount.body?.accountId === null,
+    `http=${withoutAccount.status} accountId=${withoutAccount.body?.accountId}`,
+  )
+
+  const orgContacts = await api.call(`/contacts?accountId=${org?.id}`, { headers: reader.headers })
+  score.check(
+    "an organization's contacts are derived by filtering on accountId",
+    orgContacts.status === 200 &&
+      orgContacts.body?.total === 1 &&
+      orgContacts.body?.rows?.[0]?.name === "Dan Pop" &&
+      orgContacts.body?.rows?.[0]?.accountId === org?.id,
+    `http=${orgContacts.status} total=${orgContacts.body?.total}`,
+  )
+
+  const badAccount = await api.call("/contacts", {
+    method: "POST",
+    headers: admin.headers,
+    body: JSON.stringify({ name: "Bad Link", email: "bad@example.com", accountId: "   " }),
+  })
+  score.check(
+    "a blank accountId is refused at the schema edge (400)",
+    badAccount.status === 400,
+    `http=${badAccount.status}`,
+  )
+
+  // ---- independence: each cube serves while the others are absent -----------------
   // QWBE_MOUNTED restricts the mount set; boot twice more, one cube at a time. This is the
   // decided minimal relation made observable: neither cube needs the other to start.
   for (const [only, route] of [
