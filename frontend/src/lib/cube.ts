@@ -38,6 +38,8 @@ export type PageOf<T> = {
   limit: number
 }
 
+export type Row = Record<string, unknown>
+
 export type ListParams = {
   offset?: number
   limit?: number
