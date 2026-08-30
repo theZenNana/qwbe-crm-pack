@@ -1,0 +1,39 @@
+{
+  "entity": "accounts",
+  "route": "/accounts",
+  "comment": "Proposed default mapping (QWB-50): the fields the crm/accounts cube actually has. The owner signs off after reading the staging profile; cf_* columns and the fields listed under dropped stay out unless the profile says otherwise.",
+  "key": "vtigerId",
+  "map": {
+    "accountname": "name",
+    "account_no": "accountNo",
+    "phone": "phone",
+    "email1": "email",
+    "website": "website",
+    "account_type": "accountType",
+    "industry": "industry",
+    "rating": "rating",
+    "ownership": "ownership",
+    "employees": "employees",
+    "emailoptout": "emailOptOut",
+    "bill_street": "billingStreet",
+    "bill_city": "billingCity",
+    "bill_code": "billingCode",
+    "bill_country": "billingCountry",
+    "description": "description"
+  },
+  "booleans": ["emailoptout"],
+  "integers": ["employees"],
+  "dropped": [
+    "parentid (account-to-account hierarchy is out of scope)",
+    "annualrevenue (bare integer, no currency - stays out until carried in minor units)",
+    "siccode",
+    "tickersymbol",
+    "otherphone",
+    "email2",
+    "fax",
+    "notify_owner",
+    "ship_* address block (the cube keeps only billing)",
+    "pobox columns (not in the cube schema)",
+    "all cf_* columns (decided from the staging profile, owner signs off)"
+  ]
+}
