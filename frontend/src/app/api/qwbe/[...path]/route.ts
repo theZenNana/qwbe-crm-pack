@@ -33,9 +33,10 @@ async function handle(request: NextRequest, { params }: Params) {
 
   const result = await proxyToQwbe(
     apiBase,
-    // Keep the query string so paginated and filtered calls reach qwbe
-    // with their parameters.
-    `${path.join("/")}${request.nextUrl.search}`,
+    // Re-encode each segment: Next's catch-all decoded the raw path, so a
+    // percent-encoded %2F inside a segment (a child cube name in the catalog
+    // route) arrived as two segments and qwbe's one-segment param lost it.
+    `${path.map(encodeURIComponent).join("/")}${request.nextUrl.search}`,
     request.method,
     body,
     token,
