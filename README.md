@@ -25,12 +25,17 @@ rows — are now the `crm/accounts` cube, entity `Organization`.
 
 The relation has ONE truth: **`Contact.accountId`**.
 
-- It lives on the contact. Nullable, opaque, set by the caller at create time.
+- It lives on the contact. Nullable, opaque, set by the caller at create time and correctable
+  by `PATCH /contacts/:id` (move to another organization, or unlink with `accountId: null`).
 - An organization's contacts are DERIVED: the contacts list takes an `accountId` filter
   (`GET /contacts?accountId=...`). There is no related-list endpoint and no contactIds field.
-- Neither cube imports the other, and neither names the other in its manifest. The id is
-  checked for shape at the schema edge; resolving it to a name is the job of whoever displays
-  it (a space, a frontend, the entity summary mechanism).
+- The contacts manifest DECLARES the relation (`relations: { accountId: { target: "crm/accounts" } }`):
+  a declared target is metadata, not an import, and is what lets the metadata endpoint resolve
+  ids to names without coupling the cubes' code.
+- The id is checked for shape only. Refusing a well-formed id that does not exist needs a
+  kernel-enforced relation, which does not exist yet (the kernel offers cubes no cross-cube
+  read); until it lands, such a create is accepted and the probe pins that behaviour, to be
+  flipped to 400 when the enforcement arrives.
 - The `crm/accounts` fields are a photograph of the vtiger standard Accounts fields that
   actually carry data — not a one-to-one copy. Left out: what is empty or vtiger-internal
   (`notify_owner`, `parentid` — Account-to-Account hierarchy is out of scope), the custom
@@ -39,6 +44,15 @@ The relation has ONE truth: **`Contact.accountId`**.
 
 What stayed deliberate from the old limit: `Contact.company` is still text and references
 nothing, and `Contract.partyId` is still opaque. History is data, not a foreign key.
+
+## Deletion (decision recorded for the ticket that adds it)
+
+There is no delete endpoint on `crm/accounts` in this ticket. When deletion comes, the rule is:
+an organization is refused deletion while any contact still references its id — the contact's
+`accountId` is the one truth, so deleting under it would leave `GET /contacts?accountId=X`
+returning rows whose `GET /accounts/X` is 404. The patch schema already refuses `deleted`, so
+the back door of `PATCH {"deleted": true}` is closed. Reconciliation (cascade, unlink, or
+refuse) is the decision of that ticket, made here explicit in advance.
 
 ## The minimal relation (version one, stated and tested)
 
@@ -60,7 +74,8 @@ currencies: `contracts:value` and the summary both follow that rule.
 ```
 qwbe-package.json            package manifest — CRM parent and three children
 cubes/crm/index.ts           hierarchy parent and `/crm` child catalogue
-cubes/crm/accounts/index.ts  Organization: table, API, schemas, permissions, commands
+cubes/crm/accounts/index.ts  Organization: table, API, permissions, commands
+cubes/crm/accounts/schema.ts Organization: the domain schemas (split for the size cap)
 cubes/crm/contacts/index.ts  Contact: table, API, schemas, permissions, commands
 cubes/crm/contracts/index.ts Contract: table, API, schemas, permissions, commands
 cubes/crm/*/index.test.ts    source-local contract tests
