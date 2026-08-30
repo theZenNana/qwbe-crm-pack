@@ -13,18 +13,24 @@ describe("CRM source package boundary", () => {
   })
 
   it("declares one CRM parent with contacts and contracts as children", async () => {
-    const [{ cube: crm }, { cube: contacts }, { cube: contracts }] = await Promise.all([
+    const [{ cube: crm }, { cube: contacts }, { cube: contracts }, { cube: accounts }] = await Promise.all([
       import("./cubes/crm/index.ts"),
       import("./cubes/crm/contacts/index.ts"),
       import("./cubes/crm/contracts/index.ts"),
+      import("./cubes/crm/accounts/index.ts"),
     ])
     assert.equal(crm.manifest.name, "crm")
     assert.equal(crm.manifest.screen, true)
+    assert.equal(accounts.manifest.parent, "crm")
+    assert.equal(accounts.manifest.entity, "Organization")
     assert.deepEqual(contacts.manifest.dataMigration, [
       { fromCube: "contacts", toCube: "crm/contacts", fromPlugin: "crm-pack" },
     ])
     assert.deepEqual(contracts.manifest.dataMigration, [
       { fromCube: "contracts", toCube: "crm/contracts", fromPlugin: "crm-pack" },
+    ])
+    assert.deepEqual(accounts.manifest.dataMigration, [
+      { fromCube: "accounts", toCube: "crm/accounts", fromPlugin: "crm-pack" },
     ])
   })
 })
