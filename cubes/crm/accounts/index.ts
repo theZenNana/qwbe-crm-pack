@@ -16,84 +16,20 @@
 // stays out until it can be carried with a currency, in minor units.
 //
 // Ids: opaque strings with the prefix `acc`, same as every sibling.
+// The schemas live in ./schema.ts (size cap: split, not raise).
 
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from "@effect/platform"
 import { Effect, Schema } from "effect"
 import { Authorization, requirePermission } from "qwbe-core/auth"
 import { defineCube } from "qwbe-core/cube"
-import { EntityMeta, type SummaryRow } from "qwbe-core/entity"
+import { type SummaryRow } from "qwbe-core/entity"
 import { Forbidden, NotFound } from "qwbe-core/errors"
 import { PageOf } from "qwbe-core/http"
 import { PageParams, pageRequest } from "qwbe-core/pagination"
+import { Account, AccountCreate, AccountPatch, type AccountRow } from "./schema.ts"
 
 const TABLE = "accounts"
 const ENTITY = "Organization"
-
-const Account = Schema.Struct({
-  ...EntityMeta,
-  /** vtiger `accountname` — the one required field at the source. */
-  name: Schema.String,
-  /** vtiger `account_no`, the human-facing number. */
-  accountNo: Schema.NullOr(Schema.String),
-  phone: Schema.NullOr(Schema.String),
-  email: Schema.NullOr(Schema.String),
-  website: Schema.NullOr(Schema.String),
-  /** vtiger `account_type`. */
-  type: Schema.NullOr(Schema.String),
-  industry: Schema.NullOr(Schema.String),
-  rating: Schema.NullOr(Schema.String),
-  ownership: Schema.NullOr(Schema.String),
-  employees: Schema.NullOr(Schema.Int),
-  /** vtiger `emailoptout`, kept as a real boolean instead of a varchar(3) flag. */
-  emailOptOut: Schema.Boolean,
-  /** Billing address, the four fields of the vtiger block that carry data. */
-  billingStreet: Schema.NullOr(Schema.String),
-  billingCity: Schema.NullOr(Schema.String),
-  billingCode: Schema.NullOr(Schema.String),
-  billingCountry: Schema.NullOr(Schema.String),
-  description: Schema.NullOr(Schema.String),
-}).annotations({ identifier: "Organization" })
-
-const AccountCreate = Schema.Struct({
-  name: Schema.String,
-  accountNo: Schema.optionalWith(Schema.NullOr(Schema.String), { default: () => null }),
-  phone: Schema.optionalWith(Schema.NullOr(Schema.String), { default: () => null }),
-  email: Schema.optionalWith(Schema.NullOr(Schema.String), { default: () => null }),
-  website: Schema.optionalWith(Schema.NullOr(Schema.String), { default: () => null }),
-  type: Schema.optionalWith(Schema.NullOr(Schema.String), { default: () => null }),
-  industry: Schema.optionalWith(Schema.NullOr(Schema.String), { default: () => null }),
-  rating: Schema.optionalWith(Schema.NullOr(Schema.String), { default: () => null }),
-  ownership: Schema.optionalWith(Schema.NullOr(Schema.String), { default: () => null }),
-  employees: Schema.optionalWith(Schema.NullOr(Schema.Int), { default: () => null }),
-  emailOptOut: Schema.optionalWith(Schema.Boolean, { default: () => false }),
-  billingStreet: Schema.optionalWith(Schema.NullOr(Schema.String), { default: () => null }),
-  billingCity: Schema.optionalWith(Schema.NullOr(Schema.String), { default: () => null }),
-  billingCode: Schema.optionalWith(Schema.NullOr(Schema.String), { default: () => null }),
-  billingCountry: Schema.optionalWith(Schema.NullOr(Schema.String), { default: () => null }),
-  description: Schema.optionalWith(Schema.NullOr(Schema.String), { default: () => null }),
-}).annotations({ identifier: "OrganizationCreate" })
-
-/** Every domain field is optional on a patch; `id`, `createdAt` and `type` are not patchable. */
-const AccountPatch = Schema.Struct({
-  name: Schema.optional(Schema.String),
-  accountNo: Schema.optional(Schema.NullOr(Schema.String)),
-  phone: Schema.optional(Schema.NullOr(Schema.String)),
-  email: Schema.optional(Schema.NullOr(Schema.String)),
-  website: Schema.optional(Schema.NullOr(Schema.String)),
-  type: Schema.optional(Schema.NullOr(Schema.String)),
-  industry: Schema.optional(Schema.NullOr(Schema.String)),
-  rating: Schema.optional(Schema.NullOr(Schema.String)),
-  ownership: Schema.optional(Schema.NullOr(Schema.String)),
-  employees: Schema.optional(Schema.NullOr(Schema.Int)),
-  emailOptOut: Schema.optional(Schema.Boolean),
-  billingStreet: Schema.optional(Schema.NullOr(Schema.String)),
-  billingCity: Schema.optional(Schema.NullOr(Schema.String)),
-  billingCode: Schema.optional(Schema.NullOr(Schema.String)),
-  billingCountry: Schema.optional(Schema.NullOr(Schema.String)),
-  description: Schema.optional(Schema.NullOr(Schema.String)),
-}).annotations({ identifier: "OrganizationPatch" })
-
-type AccountRow = typeof Account.Type
 
 const group = HttpApiGroup.make("accounts")
   .add(HttpApiEndpoint.get("list")`/accounts`.setUrlParams(PageParams).addSuccess(PageOf(Account)).addError(Forbidden))
@@ -131,6 +67,8 @@ export const cube = defineCube(group, {
     tables: [TABLE],
     entity: ENTITY,
     sortable: ["name", "industry", "createdAt"],
+    // What relational.search actually serves to the links route: exact match on these.
+    searchable: ["name", "industry"],
     requiresAuth: true,
     permissions: [
       { name: "crm/accounts:read", roles: ["admin", "reader"] },
@@ -176,9 +114,12 @@ export const cube = defineCube(group, {
       update: ({ path, payload }) =>
         Effect.gen(function* () {
           yield* requirePermission("crm/accounts:write")
-          const patch = Object.keys(payload).length === 0 ? undefined : (payload as Partial<AccountRow>)
-          const a = yield* store.update(TABLE, path.id, patch ?? {})
-          if (!a) return yield* Effect.fail(new NotFound({ message: `organization ${path.id} does not exist` }))
+          const current = yield* store.byId<AccountRow>(TABLE, path.id)
+          if (!current) return yield* Effect.fail(new NotFound({ message: `organization ${path.id} does not exist` }))
+          // An empty PATCH changes nothing: the row is returned as is, with no version bump
+          // and no outbox row — store.update with an empty patch would write anyway.
+          if (Object.keys(payload).length === 0) return current
+          const a = yield* store.update(TABLE, path.id, payload as unknown as Partial<AccountRow>)
           return a as AccountRow
         }),
     },

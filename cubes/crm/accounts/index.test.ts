@@ -10,9 +10,10 @@
 
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { Cause, Effect, Exit } from "effect"
+import { Cause, Effect, Exit, Schema } from "effect"
 import { type CubeTools, validateCubeParts } from "qwbe-core/cube"
 import { CurrentUser, requirePermission } from "qwbe-core/auth"
+import { AccountPatch } from "./schema.ts"
 import type { Forbidden, NotFound } from "qwbe-core/errors"
 import { cube } from "./index.ts"
 
@@ -87,6 +88,7 @@ describe("accounts cube contract", () => {
   it("update fails NotFound for a missing id", async () => {
     const tools = {
       store: {
+        byId: () => Effect.succeed(undefined),
         update: () => Effect.succeed(undefined),
       },
       bus: { publish: () => Effect.void },
@@ -100,6 +102,46 @@ describe("accounts cube contract", () => {
     assert.ok(Exit.isFailure(result))
     const failure = Cause.failureOption(result.cause)
     assert.ok(failure._tag === "Some" && failure.value._tag === "NotFound")
+  })
+
+  it("summaryById returns title and the two detail keys (links route)", async () => {
+    // The acceptance point behind /links/{entity}/{id}: the organization summary carries one
+    // human title and the two detail lines, or nothing for a missing id.
+    const row = {
+      id: "acc_1",
+      type: "Organization",
+      name: "Ada Industries SRL",
+      industry: "manufacturing",
+      billingCity: "Iasi",
+    }
+    const tools = {
+      store: {
+        byId: (_t: string, id: string) => Effect.succeed(id === "acc_1" ? row : undefined),
+      },
+      bus: { publish: () => Effect.void },
+    } as unknown as CubeTools
+    const parts = cube.create(tools)
+    const summaryById = parts.relational!.summaryById!
+    const hit = await Effect.runPromise(summaryById("acc_1"))
+    assert.equal(hit?.title, "Ada Industries SRL")
+    assert.deepEqual(
+      hit?.details.map((d) => d.key),
+      ["industry", "city"],
+    )
+    const miss = await Effect.runPromise(summaryById("acc_none"))
+    assert.equal(miss, undefined)
+  })
+
+  it("the patch schema refuses the meta fields and bad values", () => {
+    // `deleted` is refused: there is no delete endpoint in this ticket, and a patched-away
+    // organization would orphan its contacts (the rule for deletion lives in README.md).
+    // `name` is the required title, so blank is refused; a negative headcount is refused.
+    const decode = Schema.decodeUnknownEither(AccountPatch)
+    assert.ok(decode({ deleted: true })._tag === "Left")
+    assert.ok(decode({ name: "   " })._tag === "Left")
+    assert.ok(decode({ employees: -3 })._tag === "Left")
+    assert.ok(decode({ employees: 3 })._tag === "Right")
+    assert.ok(decode({})._tag === "Right")
   })
 
   it("requirePermission refuses a caller without accounts:write", async () => {
