@@ -17,6 +17,7 @@ import {
   errorMessage,
   errorBody,
   hrefForRelation,
+  rowHref,
   listApiPath,
   listQueryString,
   metadataApiPath,
@@ -324,6 +325,15 @@ describe("relation links", () => {
 
   it("derives the list route of a cube", () => {
     assert.equal(routeOf("crm/contacts"), "/contacts")
+  })
+
+  it("builds a row link for a cube this app routes", () => {
+    assert.equal(rowHref("crm/contacts", "ct-1"), "/contacts/ct-1")
+    assert.equal(rowHref("accounts", "acc-1"), "/accounts/acc-1")
+  })
+
+  it("no row link for a cube without a route", () => {
+    assert.equal(rowHref("crm/contracts", "ctr-1"), null)
   })
 })
 

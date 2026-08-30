@@ -198,6 +198,13 @@ export function routeOf(cube: string): string {
   return `/${cube.split("/").pop()}`
 }
 
+// The link to one row's detail page, or null when this app has no route for
+// the cube (for example crm/contracts): a list then renders no row links.
+export function rowHref(cube: string, id: string): string | null {
+  const route = RELATION_ROUTES[cube] ?? RELATION_ROUTES[httpPrefixOf(cube)]
+  return route ? `${route}/${id}` : null
+}
+
 // The human title of a row, derived from metadata: the value of the first
 // required field (name on both CRM cubes), falling back to the id.
 export function titleOf(meta: CubeMetadata, row: Row): string {
