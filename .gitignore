@@ -1,3 +1,18 @@
+# Sandbox stubs. The agent sandbox creates empty placeholders for the shell and
+# editor dotfiles it denies access to; `git add -A` then sweeps them into the
+# repository. They are not part of the pack and must never reach the public repo.
+.claude/
+.mcp.json
+.bash_profile
+.bashrc
+.profile
+.zprofile
+.zshrc
+.gitconfig
+.gitmodules
+.ripgreprc
+.idea
+.vscode
 node_modules/
 *.log
 .env
