@@ -15,6 +15,7 @@
   },
   "devDependencies": {
     "@types/node": "^26.0.0",
+    "mysql2": "^3.24.2",
     "typescript": "^5.7.0"
   }
 }
