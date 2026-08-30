@@ -23,6 +23,7 @@ import {
   columnsFromFields,
   cubeApiPath,
   hrefForRelation,
+  rowHref,
   listApiPath,
   metadataApiPath,
   resolveRelationTitle,
@@ -130,6 +131,10 @@ export function CubeList({
   if (!meta) return <Skeleton className="h-64 w-full" />
 
   const columns = columnsFromFields(meta.fields).filter((c) => c.visible)
+  // The title field is the row's human identity (the same field titleOf uses
+  // on the detail page). When this app has a route for the cube, the title
+  // cell links to the row's detail page; the other cells stay inline-editable.
+  const titleFieldName = meta.fields.find((f) => f.required)?.name
   const searchableFields = meta.fields.filter((f) => f.searchable)
   const total = page?.total
   const rowCount = page?.rows.length ?? 0
@@ -259,6 +264,8 @@ export function CubeList({
                   <Cell
                     row={row}
                     column={column}
+                    isTitle={column.field.name === titleFieldName}
+                    rowLink={rowHref(cube, String(row.id))}
                     edit={edit}
                     setEdit={setEdit}
                     error={cellErrors[`${String(row.id)}:${column.field.name}`]}
@@ -390,6 +397,8 @@ function RelationSearch({
 function Cell({
   row,
   column,
+  isTitle,
+  rowLink,
   edit,
   setEdit,
   error,
@@ -397,6 +406,8 @@ function Cell({
 }: {
   row: Row
   column: ColumnSpec
+  isTitle: boolean
+  rowLink: string | null
   edit: EditState | null
   setEdit: (edit: EditState | null) => void
   error?: string
@@ -470,11 +481,18 @@ function Cell({
         >
           {content}
         </Link>
+      ) : isTitle && rowLink ? (
+        <Link className="underline" href={rowLink}>
+          {content}
+        </Link>
       ) : editable ? (
         <button
           type="button"
           className="cursor-text text-left"
           title={`Edit ${field.label}`}
+          // The accessible name must say what the button does; the cell value
+          // alone left a screen reader no way to find the edit affordance.
+          aria-label={`Edit ${field.label}`}
           onClick={startEdit}
         >
           {content}

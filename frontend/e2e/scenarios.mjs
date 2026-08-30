@@ -164,20 +164,21 @@ export async function scenarioInlineEdit() {
   await settle(ORG_A)
   let snap = snapshot()
   const newValue = "E2E City Edited 42"
-  // The row for Alpha: its cells carry buttons titled "Edit <label>"; pick the City one
-  // that belongs to the Alpha row by editing Alpha's row only (one seeded org has City
-  // baseline, the other a different one, so the button names are ambiguous only across
-  // rows — take the first City button and verify the row context afterwards).
-  const cityBtn = refFor(snap.refs, (n) => n.startsWith("Edit City") || n.startsWith("Edit Billing"))
+  // The row for Alpha: editable cells carry buttons whose accessible name is
+  // "Edit <label>"; the city column is "Billing City". The edit lands on the
+  // first city-ish button and the row context is verified by the saved value.
+  const cityBtn = refFor(snap.refs, (n) => /^Edit .*City/i.test(n))
   if (!cityBtn) {
     shot("03-edit-RED", { full: true })
     return record(name, "RED", "no editable City cell button found", "03-edit-RED.png")
   }
   click(cityBtn)
   snap = snapshot()
-  const input = refFor(snap.refs, (n) => /City|Billing/.test(n) && (n.includes("textbox") || true))
-  const inputRef = snap.refs && refFor(snap.refs, (n) => /city|billing/i.test(n))
-  const target = inputRef ?? input
+  // The open editor is a textbox labelled with the field's label ("Billing City");
+  // match the role, not just the name, so the column header cannot answer.
+  const target = Object.entries(snap.refs).find(
+    ([, v]) => v.role === "textbox" && /city/i.test(v.name ?? ""),
+  )?.[0]
   if (!target) {
     shot("03-edit-RED", { full: true })
     return record(name, "RED", "edit input did not open", "03-edit-RED.png")
@@ -195,38 +196,51 @@ export async function scenarioInlineEdit() {
 }
 
 // --- 4. inline edit on a NON-editable field is refused --------------------------
+// The list hides every non-editable column by design (QWB-49: fields absent
+// from the create payload are backend bookkeeping), so the refusal is asserted
+// where a non-editable field IS shown: the detail page. It must render the
+// field's value as plain text and offer no edit affordance for it.
 export async function scenarioNonEditable(api) {
   const name = "inline edit on a field the metadata marks not editable is refused"
-  const meta = await api.call("/catalog/crm/accounts/metadata")
+  // The cube name is a single path parameter for qwbe, so it must be encoded;
+  // unencoded it is two path segments and qwbe answers 404.
+  const meta = await api.call(`/catalog/${encodeURIComponent("crm/accounts")}/metadata`)
   const fields = meta.body?.fields ?? []
   const nonEditable = fields.find((f) => !f.editable && f.name !== "id" && f.name !== "type") ?? fields.find((f) => !f.editable)
   if (!nonEditable) {
     shot("04-noneditable-RED", { full: true })
     return record(name, "RED", "metadata exposes no non-editable column at all", "04-noneditable-RED.png")
   }
-  await open("/accounts")
-  await settle(ORG_A)
-  const snap = snapshot()
-  shot("04-noneditable-field")
-  // Refusal has two visible faces, both acceptable: the column renders plain text with no
-  // "Edit <label>" button, and clicking the text opens no input.
-  const editButton = refFor(snap.refs, new RegExp(`^Edit ${nonEditable.label}`))
-  if (editButton) {
+  const row = (await api.call("/accounts?limit=1")).body?.rows?.[0]
+  if (!row) {
     shot("04-noneditable-RED", { full: true })
-    return record(name, "RED", `field ${nonEditable.name} renders an edit affordance despite editable=false`, "04-noneditable-RED.png")
+    return record(name, "RED", "no organization row available to open", "04-noneditable-RED.png")
   }
-  const textField = refFor(snap.refs, (n) => n.includes(nonEditable.label))
+  await open(`/accounts/${row.id}`)
+  const value = row[nonEditable.name]
+  await settle(nonEditable.label)
+  let snap = snapshot()
+  shot("04-noneditable-field")
+  const valueShown = snap.text.includes(nonEditable.label) && (value === null || value === undefined || snap.text.includes(String(value)))
+  // Refusal means: no edit affordance anywhere for this field. A click on the
+  // value's text must open no editor either.
+  const editButton = refFor(snap.refs, new RegExp(`^Edit ${nonEditable.label}`))
+  if (!valueShown || editButton) {
+    shot("04-noneditable-RED", { full: true })
+    return record(name, "RED", editButton ? `field ${nonEditable.name} renders an edit affordance despite editable=false` : `detail page does not show ${nonEditable.name}`, "04-noneditable-RED.png")
+  }
+  const textField = refFor(snap.refs, (n) => n === String(value) || n.includes(nonEditable.label))
   if (textField) {
     click(textField)
     const after = snapshot()
-    const openedInput = refFor(after.refs, new RegExp(`^${nonEditable.label}$`))
+    const openedInput = refFor(after.refs, (n) => n === nonEditable.label)
     shot("04-noneditable-after-click")
     if (openedInput) {
       shot("04-noneditable-RED", { full: true })
       return record(name, "RED", `clicking the ${nonEditable.name} cell opened an editor`, "04-noneditable-RED.png")
     }
   }
-  return record(name, "PASS", `field ${nonEditable.name} (editable=false) offers no inline edit`, "04-noneditable-field.png")
+  return record(name, "PASS", `field ${nonEditable.name} (editable=false) shows as plain text and offers no inline edit`, "04-noneditable-field.png")
 }
 
 // --- 5. organization -> contact -> back to the organization ---------------------
