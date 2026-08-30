@@ -34,6 +34,7 @@ import {
   titleOf,
 } from "@/lib/cube"
 import { Button } from "@/components/ui/button"
+import { CustomFieldsPanel } from "@/components/custom-fields-panel"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import {
@@ -77,6 +78,10 @@ export function CubeList({
   // string means "all".
   const [search, setSearch] = useState<Record<string, string>>({})
   const [edit, setEdit] = useState<EditState | null>(null)
+  // Bumped when a custom-field definition is added or deleted, so the metadata
+  // (and with it the columns) is re-read without a page reload.
+  const [metaVersion, setMetaVersion] = useState(0)
+  const reloadMeta = () => setMetaVersion((v) => v + 1)
   // Per-cell error messages from a failed PATCH, keyed "id:field".
   const [cellErrors, setCellErrors] = useState<Record<string, string>>({})
 
@@ -96,7 +101,7 @@ export function CubeList({
     return () => {
       alive = false
     }
-  }, [cube])
+  }, [cube, metaVersion])
 
   const filters = useMemo<Record<string, string>>(() => {
     const chosen: Record<string, string> = {}
@@ -200,6 +205,7 @@ export function CubeList({
 
   return (
     <div className="flex flex-col gap-4">
+      <CustomFieldsPanel cube={cube} onChanged={reloadMeta} />
       {searchableFields
         .filter((f) => !fixedFilters?.[f.name])
         .map((f) =>
