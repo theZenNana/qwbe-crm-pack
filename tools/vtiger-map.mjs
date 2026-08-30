@@ -68,6 +68,7 @@ const accountsLedger = existsSync(accountsLedgerPath) ? JSON.parse(readFileSync(
 const tally = { created: 0, updated: 0, missingOrg: 0, noOrg: 0, errors: 0, skipped: 0 }
 const missingOrgSample = [] // vtiger account ids only -- ids, never row values
 let seen = 0
+let firstError = null
 
 const rl = createInterface({ input: createReadStream(file, { encoding: "utf8" }), crlfDelay: Infinity })
 for await (const line of rl) {
@@ -110,13 +111,19 @@ for await (const line of rl) {
       const created = await call(mapping.route, { method: "POST", headers: H(), body: JSON.stringify(payload) })
       if (created.ok && key) ledger[key] = created.body.id
       tally.created++
-    } else tally.errors++
+    } else {
+      tally.errors++
+      if (!firstError) firstError = `update ${key}: ${res.status} ${JSON.stringify(res.body).slice(0, 200)}`
+    }
   } else {
     const created = await call(mapping.route, { method: "POST", headers: H(), body: JSON.stringify(payload) })
     if (created.ok) {
       if (key) ledger[key] = created.body.id
       tally.created++
-    } else tally.errors++
+    } else {
+      tally.errors++
+      if (!firstError) firstError = `create ${key}: ${created.status} ${JSON.stringify(created.body).slice(0, 200)}`
+    }
   }
 }
 
@@ -133,6 +140,7 @@ if (mapping.entity === "contacts") {
 }
 console.log(`skipped:    ${tally.skipped} (empty required name or a mapping error)`)
 console.log(`errors:     ${tally.errors}`)
+if (firstError) console.log(`first error: ${firstError}`)
 console.log(`ledger:     ${ledgerPath}`)
 
 if (setId) {

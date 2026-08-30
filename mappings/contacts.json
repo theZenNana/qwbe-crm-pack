@@ -4,7 +4,12 @@
   "comment": "Proposed default mapping (QWB-50): the fields the crm/contacts cube actually has. name is joined from firstname + lastname (salutation and title are dropped unless the owner says otherwise). accountId comes from vtiger's own foreign key contactdetails.accountid; a contact whose organization is not in the accounts ledger is created with accountId null and counted, never invented.",
   "key": "vtigerId",
   "map": {
-    "name": { "join": ["firstname", "lastname"] },
+    "name": {
+      "join": [
+        "firstname",
+        "lastname"
+      ]
+    },
     "email": "email",
     "phone": "phone"
   },
@@ -23,5 +28,8 @@
     "donotcall / emailoptout / reference / notify_owner",
     "mailing* address block (the contact cube has no address fields)",
     "all cf_* columns (decided from the staging profile, owner signs off)"
+  ],
+  "emptyString": [
+    "email"
   ]
 }

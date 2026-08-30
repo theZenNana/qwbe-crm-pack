@@ -15,11 +15,14 @@ const truthy = (v) => v === true || v === 1 || v === "1" || v === "on" || v === 
  *   "vtigerCol": "qwbeField"                 -- straight copy (null for empty)
  *   "qwbeField": { "join": ["a", "b"] }      -- join non-empty parts with one space
  * `booleans` / `integers` coerce the varchar(3)-style vtiger flags and int columns.
+ * `emptyString` lists qwbe fields that must stay a string even when vtiger is empty
+ * (the contact cube's `email` is `""`, not null).
  * Returns { payload } or { error } (e.g. an empty required name).
  */
 export const mapRow = (row, mapping) => {
   const booleans = new Set(mapping.booleans ?? [])
   const integers = new Set(mapping.integers ?? [])
+  const emptyString = new Set(mapping.emptyString ?? [])
   const payload = {}
   for (const [src, dst] of Object.entries(mapping.map)) {
     if (typeof dst === "string") {
@@ -29,6 +32,7 @@ export const mapRow = (row, mapping) => {
         v = v === null || v === undefined || v === "" ? null : Number(v)
         if (v !== null && !Number.isInteger(v)) return { error: `${src} is not an integer` }
       } else v = emptyToNull(v)
+      if (v === null && emptyString.has(dst)) v = ""
       payload[dst] = v
     } else if (dst && Array.isArray(dst.join)) {
       const joined = dst.join
