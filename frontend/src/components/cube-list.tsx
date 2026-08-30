@@ -5,8 +5,8 @@
 // It takes a cube name, fetches that cube's metadata and its rows through the
 // server-side proxy, and renders columns from the published fields: label from
 // `label`, cell shape from `type` and `enum`, sortable headers only where
-// `sortable` is true, and a filter control only for the search surface the
-// backend actually serves (equality on a searchable relation field).
+// `sortable` is true, and a filter control for every field the metadata marks
+// `searchable` (a relation field becomes a select, a plain field a text input).
 // Paging and sorting are server-side end to end: the page, page size and sort
 // parameters travel to qwbe; nothing here slices a full result set.
 
@@ -22,10 +22,12 @@ import {
   canEdit,
   columnsFromFields,
   cubeApiPath,
-  errorMessage,
   hrefForRelation,
   listApiPath,
   metadataApiPath,
+  resolveRelationTitle,
+  saveCell,
+  sortRequestFor,
   titleOf,
 } from "@/lib/cube"
 import { Button } from "@/components/ui/button"
@@ -67,8 +69,9 @@ export function CubeList({
   const [offset, setOffset] = useState(0)
   const [sortBy, setSortBy] = useState<string | undefined>(undefined)
   const [descending, setDescending] = useState(false)
-  // The chosen value of the searchable relation field, or empty for "all".
-  const [search, setSearch] = useState("")
+  // The chosen values of the searchable fields, keyed by field name; empty
+  // string means "all".
+  const [search, setSearch] = useState<Record<string, string>>({})
   const [edit, setEdit] = useState<EditState | null>(null)
   // Per-cell error messages from a failed PATCH, keyed "id:field".
   const [cellErrors, setCellErrors] = useState<Record<string, string>>({})
@@ -92,8 +95,10 @@ export function CubeList({
   }, [cube])
 
   const filters = useMemo<Record<string, string>>(() => {
-    const field = meta ? searchField(meta) : null
-    const chosen = field && search !== "" ? { [field.name]: search } : {}
+    const chosen: Record<string, string> = {}
+    for (const f of meta?.fields ?? []) {
+      if (f.searchable && search[f.name]) chosen[f.name] = search[f.name]
+    }
     return { ...(fixedFilters ?? {}), ...chosen }
   }, [fixedFilters, search, meta])
   const effectiveFilters = useMemo(
@@ -124,19 +129,28 @@ export function CubeList({
   if (metaError) return <p role="alert">metadata unavailable: {metaError}</p>
   if (!meta) return <Skeleton className="h-64 w-full" />
 
-  const columns = columnsFromFields(meta.fields)
-  const relationSearchField = searchField(meta)
-  const total = page?.total ?? 0
+  const columns = columnsFromFields(meta.fields).filter((c) => c.visible)
+  const searchableFields = meta.fields.filter((f) => f.searchable)
+  const total = page?.total
+  const rowCount = page?.rows.length ?? 0
+
+  // A stale cell error must not survive a change of page, sort or filter: the
+  // row it was about is not the row in view any more. Every entry point below
+  // changes the request parameters, so each clears the map as it goes.
+  const requery = (apply: () => void) => {
+    setCellErrors({})
+    apply()
+  }
 
   const toggleSort = (column: ColumnSpec) => {
-    if (!column.sortable) return
-    if (sortBy === column.field.name) {
-      setDescending(!descending)
-    } else {
-      setSortBy(column.field.name)
-      setDescending(false)
-    }
-    setOffset(0)
+    // A column the metadata does not mark sortable never produces a request.
+    const next = sortRequestFor(column, sortBy, descending)
+    if (!next) return
+    requery(() => {
+      setSortBy(next.sortBy)
+      setDescending(next.descending)
+      setOffset(0)
+    })
   }
 
   const saveEdit = async (row: Row, fieldMeta: FieldMetadata, next: string) => {
@@ -144,38 +158,66 @@ export function CubeList({
     setEdit(null)
     if (next === String(current ?? "")) return
     const key = `${String(row.id)}:${fieldMeta.name}`
-    const response = await fetch(cubeApiPath(cube, `/${String(row.id)}`), {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ [fieldMeta.name]: coerce(fieldMeta, next) }),
+    const result = await saveCell({
+      rowPath: cubeApiPath(cube, `/${String(row.id)}`),
+      field: fieldMeta,
+      current,
+      next,
+      doFetch: fetch,
     })
-    if (response.ok) {
-      // The saved value shows without a reload: the row is patched in place.
-      const saved = (await response.json()) as Row
+    if (result.status === "saved") {
+      // Only the patched key is merged: a concurrent, out-of-order response
+      // body must not overwrite the other columns of the row.
       setPage((p) =>
-        p ? { ...p, rows: p.rows.map((r) => (String(r.id) === String(row.id) ? saved : r)) } : p,
+        p
+          ? {
+              ...p,
+              rows: p.rows.map((r) =>
+                String(r.id) === String(row.id) ? { ...r, [result.field]: result.value } : r,
+              ),
+            }
+          : p,
       )
       setCellErrors((e) => {
         const next = { ...e }
         delete next[key]
         return next
       })
-    } else {
+    } else if (result.status === "refused") {
       // The message qwbe returned is shown in that cell, and the old value
       // stays until a save succeeds.
-      const body: unknown = await response.json().catch(() => undefined)
-      setCellErrors((e) => ({ ...e, [key]: errorMessage(body) }))
+      setCellErrors((e) => ({ ...e, [key]: result.message }))
     }
   }
 
   return (
     <div className="flex flex-col gap-4">
-      {relationSearchField && !fixedFilters?.[relationSearchField.name] && (
-        <RelationSearch meta={meta} field={relationSearchField} value={search} onChange={(v) => {
-          setSearch(v)
-          setOffset(0)
-        }} />
-      )}
+      {searchableFields
+        .filter((f) => !fixedFilters?.[f.name])
+        .map((f) =>
+          f.relation ? (
+            <RelationSearch
+              key={f.name}
+              meta={meta}
+              field={f}
+              value={search[f.name] ?? ""}
+              onChange={(v) => {
+                requery(() => setSearch((s) => ({ ...s, [f.name]: v })))
+                setOffset(0)
+              }}
+            />
+          ) : (
+            <TextSearch
+              key={f.name}
+              field={f}
+              value={search[f.name] ?? ""}
+              onChange={(v) => {
+                requery(() => setSearch((s) => ({ ...s, [f.name]: v })))
+                setOffset(0)
+              }}
+            />
+          ),
+        )}
       {listError && <p role="alert">{listError}</p>}
       <Table>
         <TableHeader>
@@ -230,22 +272,28 @@ export function CubeList({
       </Table>
       <div className="flex items-center justify-between">
         <span className="text-sm text-muted-foreground">
-          {page ? `${page.offset + 1}-${page.offset + page.rows.length} of ${total}` : "loading"}
+          {page
+            ? total !== undefined
+              ? `${page.offset + 1}-${page.offset + rowCount} of ${total}`
+              : `${page.offset + 1}-${page.offset + rowCount}`
+            : "loading"}
         </span>
         <div className="flex gap-2">
           <Button
             variant="outline"
             size="sm"
             disabled={offset === 0}
-            onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
+            onClick={() => requery(() => setOffset(Math.max(0, offset - PAGE_SIZE)))}
           >
             Previous
           </Button>
           <Button
             variant="outline"
             size="sm"
-            disabled={!page || offset + PAGE_SIZE >= total}
-            onClick={() => setOffset(offset + PAGE_SIZE)}
+            // Without a total from qwbe, a short page is the only proof that
+            // the end was reached.
+            disabled={!page || (total !== undefined ? offset + PAGE_SIZE >= total : rowCount < PAGE_SIZE)}
+            onClick={() => requery(() => setOffset(offset + PAGE_SIZE))}
           >
             Next
           </Button>
@@ -255,12 +303,33 @@ export function CubeList({
   )
 }
 
-// The one field the backend can search by: a searchable field carrying a
-// relation (equality on the link). qwbe publishes no free-text search route.
-function searchField(meta: CubeMetadata): FieldMetadata | null {
-  return meta.fields.find((f) => f.searchable && f.relation) ?? null
+// A searchable field the backend serves by exact equality. A text field gets a
+// text input; the value travels as the field's filter value.
+function TextSearch({
+  field,
+  value,
+  onChange,
+}: {
+  field: FieldMetadata
+  value: string
+  onChange: (value: string) => void
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-sm text-muted-foreground">{field.label}</span>
+      <Input
+        className="w-64"
+        aria-label={`Filter by ${field.label}`}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </div>
+  )
 }
 
+// A searchable relation field: the caller picks one row of the target cube.
+// The options are the first page of the target (200 is qwbe's MAX_LIMIT); when
+// the target holds more, the select says so instead of pretending to be whole.
 function RelationSearch({
   meta,
   field,
@@ -272,19 +341,26 @@ function RelationSearch({
   value: string
   onChange: (value: string) => void
 }) {
+  const [targetMeta, setTargetMeta] = useState<CubeMetadata | null>(null)
   const [options, setOptions] = useState<Row[] | null>(null)
+  const [truncated, setTruncated] = useState(false)
   const target = field.relation!.target
 
   useEffect(() => {
     let alive = true
-    fetch(listApiPath(target, { offset: 0, limit: 200 }))
-      .then(async (r) => (r.ok ? ((await r.json()) as PageOf<Row>) : null))
-      .then((p) => {
-        if (alive) setOptions(p?.rows ?? [])
-      })
-      .catch(() => {
-        if (alive) setOptions([])
-      })
+    Promise.all([
+      fetch(metadataApiPath(target))
+        .then(async (r) => (r.ok ? ((await r.json()) as CubeMetadata) : null))
+        .catch(() => null),
+      fetch(listApiPath(target, { offset: 0, limit: 200 }))
+        .then(async (r) => (r.ok ? ((await r.json()) as PageOf<Row>) : null))
+        .catch(() => null),
+    ]).then(([m, p]) => {
+      if (!alive) return
+      setTargetMeta(m)
+      setOptions(p?.rows ?? [])
+      setTruncated(p !== null && p.rows.length >= 200 && (p.total === undefined || p.total > p.rows.length))
+    })
     return () => {
       alive = false
     }
@@ -301,11 +377,12 @@ function RelationSearch({
           <SelectItem value="all">All {meta.entity ?? "rows"}</SelectItem>
           {(options ?? []).map((row) => (
             <SelectItem key={String(row.id)} value={String(row.id)}>
-              {titleOf(meta, row)}
+              {targetMeta ? titleOf(targetMeta, row) : String(row.id)}
             </SelectItem>
           ))}
         </SelectContent>
       </Select>
+      {truncated && <span className="text-xs text-muted-foreground">first 200 shown</span>}
     </div>
   )
 }
@@ -330,13 +407,21 @@ function Cell({
   const key = `${String(row.id)}:${field.name}`
   const editing = edit?.id === String(row.id) && edit.field === field.name
 
+  const startEdit = () =>
+    setEdit({
+      id: String(row.id),
+      field: field.name,
+      value: value === null || value === undefined ? "" : String(value),
+    })
+
+  // The edit affordance follows the metadata alone: editable is enough. A
+  // relation field edits as its opaque id for now; a picker is future work,
+  // and shrinking the editable surface silently is not an option.
+  const editable = canEdit(field)
+
   let content: React.ReactNode
   if (field.relation && value !== null && value !== undefined) {
-    content = (
-      <Link className="underline" href={hrefForRelation(field.relation.target, String(value))}>
-        {String(value)}
-      </Link>
-    )
+    content = <RelationValue target={field.relation.target} id={String(value)} />
   } else if (field.type === "boolean") {
     content = value ? "yes" : "no"
   } else {
@@ -346,22 +431,51 @@ function Cell({
   return (
     <div className="flex flex-col gap-1">
       {editing ? (
-        <Input
-          autoFocus
-          defaultValue={edit.value}
-          aria-label={field.label}
-          onBlur={(e) => onSave(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") onSave(e.currentTarget.value)
-            if (e.key === "Escape") setEdit(null)
-          }}
-        />
-      ) : canEdit(field) && field.relation === null ? (
+        field.enum && field.enum.length > 0 ? (
+          <Select
+            value={edit.value}
+            onValueChange={(v) => {
+              setEdit(null)
+              onSave(v)
+            }}
+          >
+            <SelectTrigger className="w-40" aria-label={field.label}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {field.nullable && <SelectItem value="">—</SelectItem>}
+              {field.enum.map((v) => (
+                <SelectItem key={v} value={v}>
+                  {v}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : (
+          <Input
+            autoFocus
+            defaultValue={edit.value}
+            aria-label={field.label}
+            onBlur={(e) => onSave(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") onSave(e.currentTarget.value)
+              if (e.key === "Escape") setEdit(null)
+            }}
+          />
+        )
+      ) : field.relation && hrefForRelation(field.relation.target, String(value ?? "")) ? (
+        <Link
+          className="underline"
+          href={hrefForRelation(field.relation.target, String(value))!}
+        >
+          {content}
+        </Link>
+      ) : editable ? (
         <button
           type="button"
           className="cursor-text text-left"
           title={`Edit ${field.label}`}
-          onClick={() => setEdit({ id: String(row.id), field: field.name, value: value === null || value === undefined ? "" : String(value) })}
+          onClick={startEdit}
         >
           {content}
         </button>
@@ -377,12 +491,19 @@ function Cell({
   )
 }
 
-// Empty string stays null for nullable fields, numbers become numbers.
-function coerce(field: FieldMetadata, value: string): unknown {
-  if (value === "") return null
-  if (field.type === "integer" || field.type === "number") {
-    const n = Number(value)
-    return Number.isFinite(n) ? n : value
-  }
-  return value
+// A relation cell shows the target row's title, resolved through the target
+// cube's own metadata and row endpoint, falling back to the raw id. The link,
+// when this app has a route for the target, wraps the resolved title.
+function RelationValue({ target, id }: { target: string; id: string }) {
+  const [title, setTitle] = useState<string | null>(null)
+  useEffect(() => {
+    let alive = true
+    resolveRelationTitle(target, id).then((t) => {
+      if (alive) setTitle(t)
+    })
+    return () => {
+      alive = false
+    }
+  }, [target, id])
+  return <>{title ?? id}</>
 }

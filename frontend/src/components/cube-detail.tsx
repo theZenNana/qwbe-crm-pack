@@ -87,8 +87,14 @@ export function CubeDetail({
                 <div className="grid grid-cols-[10rem_1fr] gap-2 py-2 text-sm">
                   <span className="text-muted-foreground">{field.label}</span>
                   <span>
-                    {field.relation && value !== null && value !== undefined ? (
-                      <Link className="underline" href={hrefForRelation(field.relation.target, String(value))}>
+                    {field.relation &&
+                     value !== null &&
+                     value !== undefined &&
+                     hrefForRelation(field.relation.target, String(value)) ? (
+                      <Link
+                        className="underline"
+                        href={hrefForRelation(field.relation.target, String(value))!}
+                      >
                         {String(value)}
                       </Link>
                     ) : field.type === "boolean" ? (

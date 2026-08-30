@@ -47,6 +47,8 @@ npm run typecheck
 
 The list tests stub qwbe entirely: they prove that columns are derived from metadata
 (a field added to the stub appears without touching any component), that non-editable
-fields refuse editing, that a PATCH failure surfaces the qwbe message in the cell,
-that relation links resolve to the right href, and that the list request carries the
-page, sort and filter parameters.
+fields refuse editing, that a refused PATCH leaves the old value and carries qwbe's
+own message for the edited field back to the cell, that relation links resolve to the
+right href (and yield no link for a target without a route), that sorting refuses a
+non-sortable column, and that the list request carries the page, sort and filter
+parameters without letting a filter key override paging.
