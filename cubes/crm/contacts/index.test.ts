@@ -53,15 +53,53 @@ describe("contacts cube contract", () => {
     assert.deepEqual(cube.manifest.publishes, ["crm/contacts.created"])
   })
 
-  it("keeps the relation shape decided in QWB-47", () => {
-    // accountId is the one truth of the contact-to-organization relation, but the accounts
-    // cube is still not named in the manifest: the manifest carries no reference to it, no
-    // related-list endpoint, and no copied field. The filter on the list is the derived
-    // contact list of an organization.
+  it("declares the accountId relation as metadata, and nothing more (QWB-47)", () => {
+    // The one truth of the contact-to-organization relation is accountId; the manifest now
+    // DECLARES its target so the metadata endpoint can resolve ids to names. A declared
+    // target is metadata, not an import: no code couples the cubes, there is still no
+    // related-list endpoint, no copied field. The filter on the list is the derived contact
+    // list of an organization.
+    assert.deepEqual(cube.manifest.relations, { accountId: { target: "crm/accounts" } })
     const source = JSON.stringify(cube.manifest)
-    for (const word of ["crm/accounts", "organization", "companyId", "erp"]) {
+    for (const word of ["organization", "companyId", "erp", "contactIds"]) {
       assert.ok(!source.includes(word), word)
     }
+  })
+
+  it("the patch lets a contact move or unlink, and fails NotFound for a missing id", async () => {
+    // accountId is write-once nowhere: PATCH /contacts/:id moves a contact to another
+    // organization or unlinks it (accountId null) — the foreign key is the truth, so it
+    // must be correctable.
+    const rows: Record<string, unknown> = {
+      cont_1: { id: "cont_1", type: "Contact", name: "Ada", email: "a@e.com", phone: null, company: null, accountId: "acc_1" },
+    }
+    const tools = {
+      store: {
+        byId: (_t: string, id: string) => Effect.succeed(rows[id]),
+        update: (_t: string, id: string, patch: Record<string, unknown>) =>
+          Effect.succeed({ ...(rows[id] as object), ...patch }),
+      },
+      bus: { publish: () => Effect.void },
+    } as unknown as CubeTools
+    const update = cube.create(tools).handlers.update
+    const run = (payload: Record<string, unknown>) =>
+      Effect.runPromiseExit(
+        update({ path: { id: "cont_1" }, payload } as Parameters<typeof update>[0]).pipe(
+          Effect.provideService(CurrentUser, admin),
+        ) as Effect.Effect<unknown, Forbidden | NotFound>,
+      )
+    const moved = (await run({ accountId: "acc_2" })) as { _tag: string; value?: unknown }
+    assert.equal(moved._tag, "Success")
+    assert.equal((moved.value as { accountId: string }).accountId, "acc_2")
+    const unlinked = (await run({ accountId: null })) as { _tag: string; value?: unknown }
+    assert.equal((unlinked.value as { accountId: string | null }).accountId, null)
+    const missing = await Effect.runPromiseExit(
+      update({ path: { id: "cont_none" }, payload: { name: "x" } } as Parameters<typeof update>[0]).pipe(
+        Effect.provideService(CurrentUser, admin),
+      ) as Effect.Effect<unknown, Forbidden | NotFound>,
+    )
+    const failure = Cause.failureOption((missing as Exclude<typeof missing, { _tag: "Success" }>).cause)
+    assert.ok(failure._tag === "Some" && failure.value._tag === "NotFound")
   })
 
   it("get fails NotFound for a missing id, with a store that has nothing", async () => {
