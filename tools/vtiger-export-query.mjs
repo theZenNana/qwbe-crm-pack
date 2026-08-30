@@ -3,8 +3,9 @@
 // SQL without a database.
 //
 // The join shape is the vtiger 5.4 entity model: crmentity (registry, holds `deleted`)
-// LEFT JOIN base table LEFT JOIN the `*cf` companion LEFT JOIN the address block, on the
-// entity id that equals crmentity.crmid. Only active rows (deleted = 0) ever leave.
+// JOIN base table (inner: no crmentity row, no entity) LEFT JOIN the `*cf` companion
+// LEFT JOIN the address block, on the entity id that equals crmentity.crmid. Only active
+// rows (deleted = 0) ever leave.
 // Structure was researched once (wiki, 2026-08-29); no row value is ever read here.
 
 /** The two entities this export knows. */
@@ -88,9 +89,13 @@ const BUILDERS = {
 export const buildQuery = (entity, cfColumns) => {
   const b = BUILDERS[entity]
   if (!b) throw new Error(`unknown entity: ${entity} (known: ${ENTITIES.join(", ")})`)
+  // Base column names, unquoted (the base selects are already table-qualified).
+  const baseNames = new Set(b.columns.map((c) => c.replace(/^[a-z]+\./, "").replace(/ AS .*$/, "")))
+  // Every cf select is explicitly aliased. If a custom-field column ever shares a base
+  // column's name, it is re-prefixed `cf_` so it cannot silently overwrite the base value.
   const cfSelects = (cfColumns ?? [])
     .filter((c) => c !== b.cfKey)
-    .map((c) => `${b.cfTable}.\`${c}\``)
+    .map((c) => `${b.cfTable}.\`${c}\` AS \`${baseNames.has(c) ? `cf_${c}` : c}\``)
   const columns = [...b.columns, ...cfSelects]
   const sql = ["SELECT", columns.map((c) => `  ${c}`).join(",\n"), ...b.from, "WHERE e.deleted = 0"].join("\n")
   const countSql = [...b.from, "WHERE e.deleted = 0"].join("\n").replace(/^FROM/, "SELECT COUNT(*) AS n\nFROM")

@@ -8,10 +8,12 @@
 // when the buffer would overflow -- never a partial line, never the whole file in memory.
 //
 // Environment: QWBE_URL (default http://127.0.0.1:4500), QWBE_USER and QWBE_PASSWORD
-// (default admin/admin -- the lab instance).
+// (both required -- the tool exits 2 without them, no default credentials).
 //
 // Usage: node tools/vtiger-to-staging.mjs <file.jsonl> [setName]
 // Prints: the set id, the row count and the malformed count. Never a row value.
+// On a failed chunk it prints the absolute line range, the set id and the HTTP status,
+// and exits non-zero, so the operator can resume from a known line.
 
 import { createReadStream } from "node:fs"
 import { basename } from "node:path"
@@ -23,8 +25,14 @@ if (!file) {
   process.exit(2)
 }
 const base = (process.env.QWBE_URL ?? "http://127.0.0.1:4500").replace(/\/$/, "")
-const user = process.env.QWBE_USER ?? "admin"
-const password = process.env.QWBE_PASSWORD ?? "admin"
+for (const name of ["QWBE_USER", "QWBE_PASSWORD"]) {
+  if (!process.env[name]) {
+    console.error(`set ${name} in the environment (no default credentials)`)
+    process.exit(2)
+  }
+}
+const user = process.env.QWBE_USER
+const password = process.env.QWBE_PASSWORD
 
 const call = async (path, options = {}) => {
   const r = await fetch(base + path, options)
@@ -35,7 +43,9 @@ const call = async (path, options = {}) => {
   } catch {
     body = text
   }
-  if (r.status >= 300) throw new Error(`${options.method ?? "GET"} ${path} -> ${r.status}: ${text.slice(0, 300)}`)
+  // Non-2xx: print method, path and status only. A rejected chunk's 400 body embeds the
+  // whole chunk text (raw customer rows) -- never echo any part of the response body.
+  if (r.status >= 300) throw new Error(`${options.method ?? "GET"} ${path} -> HTTP ${r.status}`)
   return body
 }
 
@@ -57,7 +67,8 @@ const set = await call("/staging/sets", {
 })
 
 // 1.9M chars: safely under the cube's 2,000,000-char cap, and always a whole number of lines.
-const MAX_CHARS = 1_900_000
+// QWB50_MAX_CHARS exists so the tests can force real chunk boundaries and rejections.
+const MAX_CHARS = Number(process.env.QWB50_MAX_CHARS) || 1_900_000
 const rl = createInterface({ input: createReadStream(file, { encoding: "utf8" }), crlfDelay: Infinity })
 
 let buf = []
@@ -66,17 +77,28 @@ let lineNo = 0
 let chunkStart = 1
 let totalParsed = 0
 let totalMalformed = 0
+let oversized = 0
 
 const flush = async () => {
   if (buf.length === 0) return
   const text = buf.join("\n")
-  const res = await call(`/staging/sets/${set.id}/chunks`, {
-    method: "POST",
-    headers: H,
-    body: JSON.stringify({ text, startLine: chunkStart }),
-  })
-  totalParsed += res.parsed ?? 0
-  totalMalformed += res.malformed?.length ?? 0
+  const from = chunkStart
+  const to = lineNo
+  try {
+    const res = await call(`/staging/sets/${set.id}/chunks`, {
+      method: "POST",
+      headers: H,
+      body: JSON.stringify({ text, startLine: chunkStart }),
+    })
+    totalParsed += res.parsed ?? 0
+    totalMalformed += res.malformed?.length ?? 0
+  } catch (err) {
+    // A rejected chunk must not abort silently: report the absolute line range and the set
+    // id, and exit non-zero so the next attempt can resume from a known line.
+    console.error(`chunk FAILED: lines ${from}-${to} (set ${set.id}): ${err.message}`)
+    console.error(`resume from line ${from}; nothing after it was uploaded`)
+    process.exit(1)
+  }
   buf = []
   bufChars = 0
   chunkStart = lineNo + 1
@@ -84,9 +106,15 @@ const flush = async () => {
 
 for await (const line of rl) {
   lineNo++
+  if (line.length + 1 > MAX_CHARS) {
+    // A single line over the cap can never be posted: refuse it, count it, keep going.
+    oversized++
+    continue
+  }
+  // Flush BEFORE appending: the buffer must never grow past the cap, not by one line.
+  if (bufChars + line.length + 1 > MAX_CHARS) await flush()
   buf.push(line)
   bufChars += line.length + 1
-  if (bufChars >= MAX_CHARS) await flush()
 }
 await flush()
 
@@ -97,3 +125,7 @@ console.log(`set id:        ${set.id}`)
 console.log(`rows:          ${state.rowCount}`)
 console.log(`malformed:     ${state.malformedCount}`)
 console.log(`chunks parsed: ${totalParsed} rows, ${totalMalformed} malformed lines counted`)
+if (oversized > 0) {
+  console.log(`oversized:     ${oversized} single lines larger than the chunk cap were refused, not posted`)
+  process.exitCode = 1
+}

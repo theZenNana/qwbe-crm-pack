@@ -7,7 +7,8 @@
 // files and the accounts ledger, how many contacts point at an organization that never made
 // it into qwbe.
 //
-// Environment: QWBE_URL, QWBE_USER, QWBE_PASSWORD (as the other tools).
+// Environment: QWBE_URL, QWBE_USER, QWBE_PASSWORD (all required; the tool exits 2
+// without them, and fails fast on a rejected login instead of printing n/a counts).
 //
 // Usage: node tools/vtiger-verify.mjs <accounts.jsonl> [contacts.jsonl] [--set-accounts ID] [--set-contacts ID]
 
@@ -24,6 +25,12 @@ const [accountsFile, contactsFile] = positional
 if (!accountsFile) {
   console.error("usage: node tools/vtiger-verify.mjs <accounts.jsonl> [contacts.jsonl] [--set-accounts ID] [--set-contacts ID]")
   process.exit(2)
+}
+for (const name of ["QWBE_USER", "QWBE_PASSWORD"]) {
+  if (!process.env[name]) {
+    console.error(`set ${name} in the environment (no default credentials)`)
+    process.exit(2)
+  }
 }
 
 const base = (process.env.QWBE_URL ?? "http://127.0.0.1:4500").replace(/\/$/, "")
@@ -42,10 +49,14 @@ const login = await call("/auth/login", {
   method: "POST",
   headers: { "content-type": "application/json" },
   body: JSON.stringify({
-    username: process.env.QWBE_USER ?? "admin",
-    password: process.env.QWBE_PASSWORD ?? "admin",
+    username: process.env.QWBE_USER,
+    password: process.env.QWBE_PASSWORD,
   }),
 })
+if (!login.ok) {
+  console.error(`login failed: HTTP ${login.status} -- refusing to print misleading n/a counts`)
+  process.exit(1)
+}
 const H = () => ({ authorization: `Bearer ${login.body.token}`, "content-type": "application/json" })
 
 const countLines = async (file) => {
@@ -79,7 +90,7 @@ const line = async (label, file, setId, inQwbe) => {
   const staged = await stagingRows(setId)
   const diffStaging = staged === undefined ? "n/a" : String(staged - exported)
   const diffQwbe = inQwbe === undefined ? "n/a" : String(inQwbe - exported)
-  console.log(`${label}: exported=${exported} staging=${staged ?? "n/a"} (diff ${diffStaging}) qwbe=${inQwbe ?? "n/a"} (diff ${diffQwbe})`)
+  console.log(`${label}: exported=${exported} staging=${staged ?? "n/a"} (diff ${diffStaging}) qwbe=${inQwbe ?? "n/a"} (diff ${diffQwbe}; whole-cube total -- assume the cube held nothing before this import, otherwise the diff is off by that)`)
   return exported
 }
 

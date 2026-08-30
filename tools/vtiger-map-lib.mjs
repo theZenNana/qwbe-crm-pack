@@ -39,7 +39,7 @@ export const mapRow = (row, mapping) => {
         .map((part) => String(row[part] ?? "").trim())
         .filter((part) => part !== "")
         .join(" ")
-      payload[Object.keys(mapping.map).find((k) => mapping.map[k] === dst)] = joined === "" ? null : joined
+      payload[src] = joined === "" ? null : joined
     }
   }
   return { payload }

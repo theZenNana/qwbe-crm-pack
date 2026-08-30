@@ -16,3 +16,8 @@
 node_modules/
 *.log
 .env
+
+# Customer-derived artefacts from the vtiger import (QWB-50) must never reach the repo.
+*.jsonl
+*-idmap.json
+vtiger-export/

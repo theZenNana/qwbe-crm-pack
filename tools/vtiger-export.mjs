@@ -39,7 +39,7 @@ const cfg = {
   password: process.env.VTIGER_DB_PASSWORD,
   database: process.env.VTIGER_DB_NAME,
 }
-if (!cfg.user || cfg.password === undefined || !cfg.database) {
+if (!cfg.user || !cfg.password || !cfg.database) {
   console.error("set VTIGER_DB_USER, VTIGER_DB_PASSWORD and VTIGER_DB_NAME in the environment")
   process.exit(2)
 }
@@ -65,11 +65,14 @@ if (!write) {
 }
 
 mkdirSync(EXPORT_DIR, { recursive: true })
-const outPath = join(EXPORT_DIR, `${entity}.jsonl`)
+const outDir = process.env.QWB50_EXPORT_DIR ?? EXPORT_DIR // override used only by the fixture tests
+const outPath = join(outDir, `${entity}.jsonl`)
 const out = createWriteStream(outPath, { encoding: "utf8" })
 
-// Stream mode: rows flow one at a time; nothing accumulates.
-const stream = conn.connection.query({ sql, rowsAsStream: true })
+// Stream mode: `rowsAsStream` is NOT a mysql2 API (the old call threw TypeError and
+// --write never produced a file). The real API is the Readable returned by
+// Query.prototype.stream(): rows flow one at a time, nothing accumulates.
+const stream = conn.connection.query(sql).stream()
 let n = 0
 for await (const row of stream) {
   out.write(JSON.stringify(row) + "\n")

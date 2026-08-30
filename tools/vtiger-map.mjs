@@ -12,13 +12,15 @@
 //
 // Contacts: accountId comes from vtiger's own foreign key (contactdetails.accountid),
 // resolved through the accounts ledger. An organization that is missing from the ledger is
-// COUNTED and reported; the contact gets accountId null and nothing is invented.
+// COUNTED and reported (count only, never the id); the contact gets accountId null and
+// nothing is invented. On a rerun a still-missing organization clears a stale accountId.
 //
-// Environment: QWBE_URL, QWBE_USER, QWBE_PASSWORD (as vtiger-to-staging.mjs).
+// Environment: QWBE_URL, QWBE_USER, QWBE_PASSWORD (all required; the tool exits 2
+// without them rather than silently authenticating as a default user).
 //
 // Usage: node tools/vtiger-map.mjs <file.jsonl> <mappings/xxx.json> [--set <stagingSetId>]
 
-import { createReadStream, existsSync, readFileSync, writeFileSync } from "node:fs"
+import { createReadStream, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { basename, dirname, join } from "node:path"
 import { createInterface } from "node:readline"
 import { mapRow, rowKey } from "./vtiger-map-lib.mjs"
@@ -29,6 +31,21 @@ const setId = setFlag > -1 ? process.argv[setFlag + 1] : undefined
 if (!file || !mappingPath) {
   console.error("usage: node tools/vtiger-map.mjs <file.jsonl> <mapping.json> [--set <setId>]")
   process.exit(2)
+}
+
+// No customer-derived file may ever land inside the repository (QWB-50 review, item 9):
+// the input must live under the export directory, outside git. Tests opt out explicitly.
+const EXPORT_DIR = "/home/lucian/WebProjects/vtiger-export"
+if (process.env.QWB50_TEST_UNSAFE_INPUT !== "1" && !file.startsWith(EXPORT_DIR + "/")) {
+  console.error(`refusing input outside ${EXPORT_DIR}: customer files never enter the repository`)
+  process.exit(2)
+}
+
+for (const name of ["QWBE_USER", "QWBE_PASSWORD"]) {
+  if (!process.env[name]) {
+    console.error(`set ${name} in the environment (no default credentials)`)
+    process.exit(2)
+  }
 }
 
 const base = (process.env.QWBE_URL ?? "http://127.0.0.1:4500").replace(/\/$/, "")
@@ -48,8 +65,8 @@ const login = await call("/auth/login", {
   method: "POST",
   headers: { "content-type": "application/json" },
   body: JSON.stringify({
-    username: process.env.QWBE_USER ?? "admin",
-    password: process.env.QWBE_PASSWORD ?? "admin",
+    username: process.env.QWBE_USER,
+    password: process.env.QWBE_PASSWORD,
   }),
 })
 if (!login.ok) throw new Error(`login failed: ${login.status}`)
@@ -65,10 +82,35 @@ const ledger = existsSync(ledgerPath) ? JSON.parse(readFileSync(ledgerPath, "utf
 const accountsLedgerPath = join(dirname(file), "accounts-idmap.json")
 const accountsLedger = existsSync(accountsLedgerPath) ? JSON.parse(readFileSync(accountsLedgerPath, "utf8")) : {}
 
-const tally = { created: 0, updated: 0, missingOrg: 0, noOrg: 0, errors: 0, skipped: 0 }
-const missingOrgSample = [] // vtiger account ids only -- ids, never row values
+const tally = { created: 0, updated: 0, missingOrg: 0, noOrg: 0, errors: 0, skipped: 0, skippedNoKey: 0 }
 let seen = 0
 let firstError = null
+
+// Error reporting: the kernel adds no error mapping, so a rejected payload can come back
+// embedded in the Effect decode error. NEVER print any part of the response body -- only
+// the HTTP status and the schema field path(s) the body's decode error names. Field paths
+// are extracted structurally (the ["field"] positions of the decode error); if none can
+// be extracted, only the status is printed. Row values never reach stdout or the log.
+const fieldPaths = (body) => {
+  const text = typeof body === "string" ? body : JSON.stringify(body ?? "")
+  const names = [...text.matchAll(/\[\\?"([A-Za-z0-9_]+)\\?"\]/g)].map((m) => m[1])
+  return [...new Set(names)]
+}
+const describeFailure = (verb, status, body) => {
+  const fields = fieldPaths(body)
+  return `${verb}: HTTP ${status}${fields.length > 0 ? ` (field: ${fields.join(", ")})` : ""}`
+}
+
+// The ledger is flushed to disk every FLUSH_EVERY rows (tmp file + rename), so a crash,
+// a kill or a dropped network mid-run keeps every vtigerId -> qwbeId pair recorded so far
+// and the rerun PATCHes instead of re-creating (QWB-50 review, item 5).
+const FLUSH_EVERY = 100
+let ledgerDirty = 0
+const saveLedger = (path, data) => {
+  writeFileSync(`${path}.tmp`, JSON.stringify(data))
+  renameSync(`${path}.tmp`, path)
+  ledgerDirty = 0
+}
 
 const rl = createInterface({ input: createReadStream(file, { encoding: "utf8" }), crlfDelay: Infinity })
 for await (const line of rl) {
@@ -82,6 +124,12 @@ for await (const line of rl) {
   }
   seen++
   const key = rowKey(row, mapping)
+  if (key === null) {
+    // A row without its external key can never be recorded in the ledger: POSTing it
+    // would silently duplicate it on every rerun (QWB-50 review, item 10).
+    tally.skippedNoKey++
+    continue
+  }
   const { payload, error } = mapRow(row, mapping)
   if (error || payload.name === null || payload.name === undefined || payload.name === "") {
     tally.skipped++
@@ -92,12 +140,14 @@ for await (const line of rl) {
     const orgKey = row[mapping.accountKey]
     if (orgKey === undefined || orgKey === null || String(orgKey) === "0" || String(orgKey) === "") {
       tally.noOrg++
+      payload.accountId = null
     } else {
       const accId = accountsLedger[String(orgKey)]
       if (accId) payload.accountId = accId
       else {
+        // Counted, never quoted: a vtiger id is re-identifiable against the source DB.
         tally.missingOrg++
-        if (missingOrgSample.length < 20) missingOrgSample.push(String(orgKey))
+        payload.accountId = null
       }
     }
   }
@@ -109,25 +159,33 @@ for await (const line of rl) {
     else if (res.status === 404) {
       // The qwbe row was deleted under us: create it anew and re-record the ledger.
       const created = await call(mapping.route, { method: "POST", headers: H(), body: JSON.stringify(payload) })
-      if (created.ok && key) ledger[key] = created.body.id
-      tally.created++
+      if (created.ok) {
+        ledger[key] = created.body.id
+        ledgerDirty++
+        tally.created++
+      } else {
+        tally.errors++
+        if (!firstError) firstError = describeFailure(`recreate ${mapping.entity}`, created.status, created.body)
+      }
     } else {
       tally.errors++
-      if (!firstError) firstError = `update ${key}: ${res.status} ${JSON.stringify(res.body).slice(0, 200)}`
+      if (!firstError) firstError = describeFailure(`update ${mapping.entity}`, res.status, res.body)
     }
   } else {
     const created = await call(mapping.route, { method: "POST", headers: H(), body: JSON.stringify(payload) })
     if (created.ok) {
-      if (key) ledger[key] = created.body.id
+      ledger[key] = created.body.id
+      ledgerDirty++
       tally.created++
     } else {
       tally.errors++
-      if (!firstError) firstError = `create ${key}: ${created.status} ${JSON.stringify(created.body).slice(0, 200)}`
+      if (!firstError) firstError = describeFailure(`create ${mapping.entity}`, created.status, created.body)
     }
   }
+  if (ledgerDirty >= FLUSH_EVERY) saveLedger(ledgerPath, ledger)
 }
 
-writeFileSync(ledgerPath, JSON.stringify(ledger))
+saveLedger(ledgerPath, ledger)
 
 console.log(`entity:     ${mapping.entity}`)
 console.log(`rows seen:  ${seen}`)
@@ -135,10 +193,10 @@ console.log(`created:    ${tally.created}`)
 console.log(`updated:    ${tally.updated}`)
 if (mapping.entity === "contacts") {
   console.log(`no org:     ${tally.noOrg} (contact has no organization in vtiger)`)
-  console.log(`missing org:${tally.missingOrg} (organization not among the imported accounts; accountId left null)`)
-  if (missingOrgSample.length > 0) console.log(`missing org vtiger ids (first 20): ${missingOrgSample.join(", ")}`)
+  console.log(`missing org:${tally.missingOrg} (organization not among the imported accounts; accountId set to null; count only, ids never printed)`)
 }
 console.log(`skipped:    ${tally.skipped} (empty required name or a mapping error)`)
+console.log(`no key:     ${tally.skippedNoKey} (row without ${mapping.key}; never POSTed, never recorded)`)
 console.log(`errors:     ${tally.errors}`)
 if (firstError) console.log(`first error: ${firstError}`)
 console.log(`ledger:     ${ledgerPath}`)
