@@ -1,9 +1,10 @@
 #!/bin/sh
-# Pre-commit hook for this repository. Three gates, in the order that fails cheapest first:
+# Pre-commit hook for this repository. Four gates, in the order that fails cheapest first:
 #
 #   1. no stray dotfiles from the agent sandbox,
-#   2. gitleaks on the staged changes,
-#   3. the project's own checks (typecheck, lint, tests) when something in the source changed.
+#   2. no customer data: exports, dumps and anything over half a megabyte,
+#   3. gitleaks on the staged changes,
+#   4. the project's own checks (typecheck, lint, tests) when something in the source changed.
 #
 # Git does not run hooks from a tracked directory by itself. After cloning, enable it once:
 #   git config core.hooksPath .githooks
@@ -24,7 +25,32 @@ if [ -n "$stray" ]; then
   exit 1
 fi
 
-# --- 2. secrets ---------------------------------------------------------------------------
+# --- 2. customer data ---------------------------------------------------------------------
+# Owner rule (2026-08-30): nothing exported from vtiger reaches GitHub. Exports live outside
+# git; only structure and counts are ever written down, never rows.
+data=$(printf '%s\n' "$staged" | grep -iE '\.(csv|tsv|sql|sqlite|sqlite3|db|dump|xlsx?|jsonl|ndjson|parquet)$' || true)
+if [ -n "$data" ]; then
+  echo "x data files do not belong in this repository:" >&2
+  printf '    %s\n' $data >&2
+  echo "  Exports and fixtures stay outside git. A tiny hand-written fixture may be named" >&2
+  echo "  *.fixture.json, and the commit message has to say so." >&2
+  exit 1
+fi
+
+# A staged file over 512 kB is almost always an export that slipped in.
+big=""
+for f in $staged; do
+  [ -f "$f" ] || continue
+  size=$(wc -c <"$f")
+  [ "$size" -gt 524288 ] && big="$big $f($((size / 1024))kB)"
+done
+if [ -n "$big" ]; then
+  echo "x staged file over 512 kB — exports and dumps stay outside git:" >&2
+  printf '    %s\n' $big >&2
+  exit 1
+fi
+
+# --- 3. secrets ---------------------------------------------------------------------------
 # gitleaks is a standalone binary (https://github.com/gitleaks/gitleaks), not an npm package.
 # It has to be on the machine: PATH or ~/.local/bin. A missing binary fails the commit instead
 # of silently skipping the scan.
@@ -43,7 +69,7 @@ fi
   exit 1
 }
 
-# --- 3. the project's own checks ----------------------------------------------------------
+# --- 4. the project's own checks ----------------------------------------------------------
 # Only when source is staged: a commit that touches the README or the wiki should not pay for a
 # full typecheck. The frontend has its own scripts, so it is checked from its own directory.
 pack_src=$(printf '%s\n' "$staged" | grep -E '^(cubes/|probes/|source-contract\.test\.mjs|qwbe-package\.json|package\.json|tsconfig\.json)' || true)
