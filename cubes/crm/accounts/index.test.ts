@@ -31,7 +31,7 @@ describe("accounts cube contract", () => {
   it("manifest declares exactly its own identity", () => {
     assert.equal(cube.manifest.name, "accounts")
     assert.equal(cube.manifest.parent, "crm")
-    assert.deepEqual(cube.manifest.tables, ["accounts"])
+    assert.deepEqual(cube.manifest.tables, ["organizations"])
     assert.equal(cube.manifest.entity, "Organization")
     assert.equal(cube.manifest.requiresAuth, true)
   })
@@ -54,10 +54,16 @@ describe("accounts cube contract", () => {
     assert.deepEqual(cube.manifest.publishes, ["crm/accounts.created"])
   })
 
-  it("carries the dataMigration the contract expects", () => {
+  it("migrates from `organizations`, never from the platform's account cube", () => {
     assert.deepEqual(cube.manifest.dataMigration, [
-      { fromCube: "accounts", toCube: "crm/accounts", fromPlugin: "crm-pack" },
+      { fromCube: "organizations", toCube: "crm/accounts", fromPlugin: "crm-pack" },
     ])
+  })
+
+  it("does not claim the table the platform's account cube owns", () => {
+    // A table has exactly one owner: the builtin `account` cube stores user accounts and
+    // credential hashes in "accounts", so a kernel mounting both would refuse to boot.
+    assert.ok(!(cube.manifest.tables ?? []).includes("accounts"))
   })
 
   it("does not import the contacts cube or hold the relation on this side", () => {
