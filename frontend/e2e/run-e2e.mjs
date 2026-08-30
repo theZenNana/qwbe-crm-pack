@@ -13,14 +13,16 @@
 import { execSync, spawnSync } from "node:child_process"
 import { createServer } from "node:net"
 import { cpSync, existsSync, mkdirSync, rmSync } from "node:fs"
-import { join } from "node:path"
+import { join, dirname } from "node:path"
+import { fileURLToPath } from "node:url"
 
-import { CONFIG, isForbiddenPort, writeResults } from "./lib.mjs"
+import { CONFIG, isForbiddenPort, record, writeResults } from "./lib.mjs"
 import { makeClient, seedDown, seedUp } from "./seed.mjs"
 import { closeTabs, runAll } from "./scenarios.mjs"
 
 const fail = (msg) => {
   console.error(`\nE2E STOP: ${msg}\n`)
+  killStack()
   writeResults([`**STOPPED** — ${msg}`])
   process.exit(2)
 }
@@ -28,6 +30,7 @@ const fail = (msg) => {
 const log = (m) => console.log(m)
 
 const ORCA_CLI = process.env.ORCA_CLI ?? "/home/lucian/.config/orca/linux-orca-cli-shim/orca"
+const frontendDir = join(dirname(fileURLToPath(import.meta.url)), "..")
 
 // --- free ports (never 4500/4510) -------------------------------------------------
 const freePort = async () => {
@@ -46,8 +49,8 @@ const freePort = async () => {
 }
 
 // --- stack startup (nohup from inside this script, PIDs recorded) -----------------
-const nohup = (cmd, logfile) => {
-  const out = execSync(`nohup ${cmd} > ${logfile} 2>&1 & echo $!`, { encoding: "utf8" })
+const nohup = (cmd, logfile, cwd) => {
+  const out = execSync(`nohup ${cmd} > ${logfile} 2>&1 & echo $!`, { encoding: "utf8", cwd })
   return Number(out.trim().split("\n").pop())
 }
 
@@ -103,7 +106,10 @@ if (existsSync(coreLink)) {
   execSync(`ln -s ../../.. ${coreLink}`)
 }
 log("== install dependencies (qwbe core) ==")
-execSync("npm ci --no-audit --no-fund --loglevel=error", { cwd: join(CONFIG.workDir, "core"), stdio: "inherit" })
+// npm run propagates npm_config_* (including the global allow-scripts policy) into this
+// process; a project-scoped install rejects the flag, so strip it for the copy's install.
+const npmEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("npm_config_")))
+execSync("npm ci --no-audit --no-fund --loglevel=error", { cwd: join(CONFIG.workDir, "core"), stdio: "inherit", env: npmEnv })
 
 const qwbePort = CONFIG.qwbePort || (await freePort())
 const fePort = CONFIG.frontendPort || (await freePort())
@@ -120,10 +126,11 @@ pids.push(
       `QWBE_READER_PASSWORD=reader QWBE_MOUNTED=${CONFIG.mounted} ` +
       `QWBE_ALLOWED_ORIGINS=http://localhost:${fePort} node src/main.ts`,
     qwbeLog,
+    join(CONFIG.workDir, "core"),
   ),
 )
 // Frontend runs from THIS repository's frontend/ directory (the code under test).
-pids.push(nohup(`env QWBE_API_URL=http://127.0.0.1:${qwbePort} npx next dev -p ${fePort}`, feLog))
+pids.push(nohup(`env QWBE_API_URL=http://127.0.0.1:${qwbePort} npx next dev -p ${fePort}`, feLog, frontendDir))
 
 log("== prove both servers are up (curl-poll) ==")
 const qwbeUp = await poll(`http://127.0.0.1:${qwbePort}/openapi.json`, { expect: [200, 401] })
@@ -132,12 +139,20 @@ const feUp = await poll(`http://localhost:${fePort}/login`, { expect: [200], tri
 if (!feUp) fail(`frontend did not come up on :${fePort} — see ${feLog}`)
 log(`both up: qwbe :${qwbePort}, frontend :${fePort}`)
 
-let api
-let seed
+let api = null
+let seed = null
+let loginError = null
 try {
   log("== seed ==")
-  api = await makeClient(qwbePort).catch((e) => fail(`seed could not log in through the qwbe API: ${e.message}`))
+  api = await makeClient(qwbePort)
   seed = await seedUp(api, log)
+} catch (e) {
+  // No session means no seed and no authenticated scenarios. Do not fake green: run the
+  // login scenario anyway (it drives the real UI and screenshots the refusal), skip the
+  // rest, and exit non-zero.
+  loginError = e.message
+  console.error(`seed could not log in through the qwbe API: ${loginError}`)
+}
 
   // Orca runtime must be ready before any browser step.
   const status = spawnSync(ORCA_CLI, ["status", "--json"], { encoding: "utf8", timeout: 30_000 })
@@ -149,22 +164,33 @@ try {
   }
   if (!ok) fail(`Orca runtime is not ready (orca status did not report state=ready):\n${status.stdout.slice(0, 400)} ${status.stderr.slice(0, 200)}`)
 
+  const { closeStaleTabs } = await import("./scenarios.mjs")
+  closeStaleTabs()
+
   log("== scenarios ==")
   let scenarioError = null
   try {
-    await runAll(api, seed)
+    if (api) {
+      await runAll(api, seed)
+    } else {
+      const { scenarioLoginOnly } = await import("./scenarios.mjs")
+      await scenarioLoginOnly()
+      record("seed and the five authenticated scenarios", "SKIP", `no qwbe session: ${loginError}`)
+    }
   } catch (e) {
     scenarioError = e
   }
   closeTabs()
 
   log("== teardown: delete the seed, kill the servers ==")
-  await seedDown(api).catch((e) => console.error(`teardown: seed deletion failed: ${e.message}`))
+  if (api) await seedDown(api).catch((e) => console.error(`teardown: seed deletion failed: ${e.message}`))
+  else console.log("teardown: nothing seeded (no session); the scratch data dir is deleted with the work directory")
   killStack()
   rmSync(CONFIG.workDir, { recursive: true, force: true })
 
   const results = writeResults([
     `Stack: qwbe :${qwbePort}, frontend :${fePort} (both proven up before the browser steps).`,
+    loginError ? `Login through the qwbe API failed: ${loginError}` : "",
     scenarioError ? `Runner error after scenarios started: ${scenarioError.message}` : "",
   ].filter(Boolean))
 
@@ -178,10 +204,5 @@ try {
     process.exit(1)
   }
   console.log("\nE2E PASS: all scenarios green")
-} catch (e) {
-  killStack()
-  rmSync(CONFIG.workDir, { recursive: true, force: true })
-  fail(`unexpected failure: ${e.stack ?? e.message}`)
-}
 
 

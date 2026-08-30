@@ -19,13 +19,41 @@ import {
 } from "./lib.mjs"
 import { CITY_BASELINE, CONTACT_LINKED, ORG_A, ORG_B } from "./seed.mjs"
 
-const FE = `http://localhost:${CONFIG.frontendPort}`
+// Read at call time: the runner sets CONFIG.frontendPort after picking a free port.
+const FE = () => `http://localhost:${CONFIG.frontendPort}`
 
 const tabs = []
 async function open(path) {
-  const r = orca("tab", "create", "--url", `${FE}${path}`)
+  const r = orca("tab", "create", "--url", `${FE()}${path}`)
+  orca("tab", "switch", "--page", r.browserPageId, "--focus")
   tabs.push(r.browserPageId)
-  return r.browserPageId
+  // The snapshot target must actually BE this tab: with stale tabs around, create/switch
+  // can lose the race, so poll the origin and re-switch until it matches (or fail loudly).
+  for (let i = 0; i < 15; i++) {
+    const s = snapshot()
+    if (s.origin.startsWith(FE())) return r.browserPageId
+    try {
+      orca("tab", "switch", "--page", r.browserPageId, "--focus")
+    } catch {
+      /* retried below */
+    }
+    await new Promise((res) => setTimeout(res, 2000))
+  }
+  throw new Error(`tab for ${FE()}${path} never became the snapshot target (origin stayed ${snapshot().origin})`)
+}
+/** Close leftover tabs of PREVIOUS e2e runs (they point at dead local ports). */
+export function closeStaleTabs() {
+  try {
+    const list = orca("tab", "list")
+    for (const t of list.tabs ?? []) {
+      const url = String(t.url ?? "")
+      if (/^http:\/\/localhost:\d+\/(login|accounts|contacts|me)/.test(url) && !tabs.includes(t.browserPageId)) {
+        orca("tab", "close", "--page", t.browserPageId)
+      }
+    }
+  } catch {
+    /* best effort */
+  }
 }
 export function closeTabs() {
   for (const id of tabs.reverse()) {
@@ -38,7 +66,7 @@ export function closeTabs() {
   tabs.length = 0
 }
 
-async function settle(text, timeout = 20_000) {
+async function settle(text, timeout = 30_000) {
   const ok = await waitForText(text, timeout)
   if (!ok) throw new Error(`page never showed ${JSON.stringify(text)}`)
 }
@@ -254,6 +282,11 @@ export async function scenarioLogout() {
   shot("06-final", { full: true })
   const pass = bounced && snapshot().origin.endsWith("/login") && !snap.text.includes("Signed in as")
   return record(name, pass ? "PASS" : "RED", pass ? "/me redirects to /login after logout" : "/me still reachable", "06-final.png")
+}
+
+/** Only the login scenario — used when the seed cannot get a session at all. */
+export async function scenarioLoginOnly() {
+  await scenarioLogin(null)
 }
 
 export async function runAll(api, seed) {
