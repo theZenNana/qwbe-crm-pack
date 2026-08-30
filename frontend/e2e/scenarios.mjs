@@ -122,15 +122,19 @@ export async function scenarioList() {
     return record(name, "RED", `list does not show both seeded orgs (${snap.origin})`, "02-accounts-list-RED.png")
   }
 
-  // Sorting: click the Name header twice for a descending sort, then Beta must come first.
-  const header = refFor(snap.refs, (n) => n.startsWith("Name"))
+  // Sorting: click the Name header's sort BUTTON twice for a descending sort, then
+  // Beta must come first. The role matters: the columnheader cell carries the same
+  // name and clicking it does nothing.
+  const sortBtn = (refs) =>
+    Object.entries(refs).find(([ , v]) => v.role === "button" && (v.name ?? "").startsWith("Name"))?.[0]
+  const header = sortBtn(snap.refs)
   if (!header) {
     shot("02-sort-RED", { full: true })
     return record(name, "RED", "Name column header not clickable", "02-sort-RED.png")
   }
   click(header)
-  await waitForText("Name ↓")
-  click(refFor(snapshot().refs, (n) => n.startsWith("Name")))
+  await waitForText("Name ↑")
+  click(sortBtn(snapshot().refs))
   await waitForText("Name ↓")
   snap = snapshot()
   shot("02-accounts-sorted-desc")
