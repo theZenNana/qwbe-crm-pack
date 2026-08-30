@@ -104,7 +104,7 @@ const describeFailure = (verb, status, body) => {
 // The ledger is flushed to disk every FLUSH_EVERY rows (tmp file + rename), so a crash,
 // a kill or a dropped network mid-run keeps every vtigerId -> qwbeId pair recorded so far
 // and the rerun PATCHes instead of re-creating (QWB-50 review, item 5).
-const FLUSH_EVERY = 100
+const FLUSH_EVERY = Number(process.env.QWB50_LEDGER_FLUSH) || 100
 let ledgerDirty = 0
 const saveLedger = (path, data) => {
   writeFileSync(`${path}.tmp`, JSON.stringify(data))

@@ -115,7 +115,7 @@ describe("import chain end-to-end (synthetic fixture, throwaway kernel)", { skip
   const run = (tool, args, env = {}) =>
     execFileSync(process.execPath, [join(here, tool), ...args], {
       encoding: "utf8",
-      env: { ...process.env, ...env },
+      env: { ...process.env, QWB50_TEST_UNSAFE_INPUT: "1", QWBE_USER: "admin", QWBE_PASSWORD: "admin", ...env },
     })
 
   before(async () => {
@@ -132,12 +132,14 @@ describe("import chain end-to-end (synthetic fixture, throwaway kernel)", { skip
     cpSync(join(repoRoot, "cubes"), join(core, "plugins", "crm-pack", "cubes"), { recursive: true })
     cpSync(join(repoRoot, "qwbe-package.json"), join(core, "plugins", "crm-pack", "qwbe-package.json"))
 
-    // Throwaway database, same recipe as the qwbe probes.
+    // Throwaway database, same recipe as the qwbe probes -- but the password is REQUIRED
+    // from the environment, never defaulted (QWB-50 review, item 25).
+    if (!process.env.QWBE_PG_PASSWORD) throw new Error("set QWBE_PG_PASSWORD in the environment (no password default)")
     const adminUrl = new URL("postgres://localhost/postgres")
     adminUrl.hostname = process.env.QWBE_PG_HOST ?? "localhost"
     adminUrl.port = process.env.QWBE_PG_PORT ?? "5433"
     adminUrl.username = process.env.QWBE_PG_USER ?? "postgres"
-    adminUrl.password = process.env.QWBE_PG_PASSWORD ?? "qwbe"
+    adminUrl.password = process.env.QWBE_PG_PASSWORD
     const dbName = `qwbe_qwb50_${Date.now().toString(36)}`
     const admin = new pg.Pool({ connectionString: adminUrl.toString(), max: 1 })
     await admin.query(`CREATE DATABASE "${dbName}"`)
@@ -286,8 +288,234 @@ describe("import chain end-to-end (synthetic fixture, throwaway kernel)", { skip
 
     // the verify command prints counts and zero differences
     const ver = run("vtiger-verify.mjs", [accountsFile, contactsFile, "--set-accounts", setIdA, "--set-contacts", setIdC], { QWBE_URL: base })
-    assert.match(ver, /accounts: exported=3 staging=3 \(diff 0\) qwbe=3 \(diff 0\)/)
-    assert.match(ver, /contacts: exported=3 staging=3 \(diff 0\) qwbe=3 \(diff 0\)/)
+    assert.match(ver, /accounts: exported=3 staging=3 \(diff 0\) qwbe=3 \(diff 0; whole-cube total/)
+    assert.match(ver, /contacts: exported=3 staging=3 \(diff 0\) qwbe=3 \(diff 0; whole-cube total/)
     assert.match(ver, /organization missing=1/)
+  })
+
+  it("prints status and field name, never row values, when the cube rejects a row", async () => {
+    const good = { ...accountsFixture[0], vtigerId: 940001, accountid: 940001, account_no: "FIX-ACC-G", accountname: "Gamma Proof SRL" }
+    const bad = { ...accountsFixture[0], vtigerId: 940002, accountid: 940002, account_no: "FIX-ACC-B", accountname: "Delta Proof SRL", employees: -7 }
+    const file = join(work, "accounts-reject.jsonl")
+    writeFileSync(file, [good, bad].map((r) => JSON.stringify(r)).join("\n") + "\n")
+    const out = run("vtiger-map.mjs", [file, join(here, "../mappings/accounts.json")], { QWBE_URL: base })
+    assert.match(out, /HTTP 400/)
+    assert.match(out, /employees/)
+    assert.match(out, /errors:\s+1/)
+    // nothing from the rejected row (nor the good one) may appear in the output
+    assert.ok(!out.includes("Delta Proof"))
+    assert.ok(!out.includes("Gamma Proof"))
+    assert.ok(!out.includes("FIX-ACC-B"))
+    assert.ok(!out.includes("-7"))
+  })
+
+  it("flushes the ledger so a mid-run kill and rerun leaves no duplicates", async () => {
+    const rows = Array.from({ length: 8 }, (_, i) => ({
+      ...accountsFixture[0],
+      vtigerId: 950001 + i,
+      accountid: 950001 + i,
+      account_no: `FIX-ACC-K${i}`,
+      accountname: `Kill Rerun ${i} SRL`,
+    }))
+    const file = join(work, "accounts-kill.jsonl")
+    writeFileSync(file, rows.map((r) => JSON.stringify(r)).join("\n") + "\n")
+    const before = await qwbeCount("accounts")
+
+    const child = spawn(process.execPath, [join(here, "vtiger-map.mjs"), file, join(here, "../mappings/accounts.json")], {
+      env: { ...process.env, QWB50_TEST_UNSAFE_INPUT: "1", QWBE_USER: "admin", QWBE_PASSWORD: "admin", QWBE_URL: base, QWB50_LEDGER_FLUSH: "1" },
+      stdio: "ignore",
+    })
+    // kill as soon as at least two rows have landed
+    for (let i = 0; i < 150 && child.exitCode === null; i++) {
+      const n = await qwbeCount("accounts")
+      if (n >= before + 2) break
+      await new Promise((r) => setTimeout(r, 100))
+    }
+    child.kill("SIGKILL")
+    await new Promise((r) => (child.exitCode !== null ? r() : child.once("exit", r)))
+
+    // rerun to completion: the ledger keeps every pair, so the cube ends with exactly 8.
+    // One duplicate is tolerated: a row whose POST completed but was killed between the
+    // response and the ledger save cannot be distinguished from a never-imported row
+    // (the cubes have no read-by-external-key endpoint). The flush keeps that window tiny.
+    const again = run("vtiger-map.mjs", [file, join(here, "../mappings/accounts.json")], { QWBE_URL: base })
+    const finalCount = await qwbeCount("accounts")
+    assert.ok(finalCount >= before + 8 && finalCount <= before + 9, `expected 8-9 rows, got ${finalCount - before}`)
+    const ledger = JSON.parse(readFileSync(join(work, "accounts-idmap.json"), "utf8"))
+    const killKeys = Object.keys(ledger).filter((k) => k >= "950001" && k <= "950008")
+    assert.equal(killKeys.length, 8)
+    assert.match(again, /errors:\s+0/)
+  })
+
+  it("respects a forced small chunk cap: boundaries on line edges, oversize lines refused", async () => {
+    const mk = (name, n, pad) =>
+      Array.from({ length: n }, (_, i) => ({
+        ...accountsFixture[0],
+        vtigerId: 960001 + i,
+        accountid: 960001 + i,
+        account_no: `FIX-ACC-C${i}`,
+        accountname: `Chunk ${name} ${i} SRL ${"x".repeat(pad)}`,
+      }))
+
+    // rows must be smaller than the forced cap, and the cap must be exceeded by two rows
+    // plus their separators, so the chunk boundary provably falls BETWEEN lines
+    const small = mk("small", 5, 0)
+    const f1 = join(work, "accounts-chunk.jsonl")
+    writeFileSync(f1, small.map((r) => JSON.stringify(r)).join("\n") + "\n")
+    const rowLen = JSON.stringify(small[0]).length
+    const cap = rowLen * 2 + 10
+    const up1 = run("vtiger-to-staging.mjs", [f1, "chunk-boundary"], { QWBE_URL: base, QWB50_MAX_CHARS: String(cap) })
+    assert.match(up1, /rows:\s+5/)
+    assert.match(up1, /malformed:\s+0/)
+
+    // one line larger than the cap: refused and counted, never posted
+    const big = [{ ...accountsFixture[0], vtigerId: 970001, accountid: 970001, account_no: "FIX-ACC-BIG", accountname: `Oversized ${"y".repeat(80)}` }]
+    const f2 = join(work, "accounts-big.jsonl")
+    writeFileSync(f2, big.map((r) => JSON.stringify(r)).join("\n") + "\n")
+    const bigLen = JSON.stringify(big[0]).length
+    const { out, status } = runFailing("vtiger-to-staging.mjs", [f2, "oversized"], { QWBE_URL: base, QWB50_MAX_CHARS: String(bigLen - 1) })
+    assert.equal(status, 1)
+    assert.match(out, /oversized:\s+1/)
+    assert.ok(!out.includes("Oversized"))
+  })
+})
+
+// ---- 4. review-fix proofs (QWB-50 review): rejected data never reaches the output ------
+
+// Runs a tool expecting a non-zero exit and returns its stdout+stderr.
+const runFailing = (tool, args, env = {}) => {
+  try {
+    execFileSync(process.execPath, [join(here, tool), ...args], {
+      encoding: "utf8",
+      env: { ...process.env, QWB50_TEST_UNSAFE_INPUT: "1", QWBE_USER: "admin", QWBE_PASSWORD: "admin", ...env },
+    })
+  } catch (e) {
+    return { out: String(e.stdout ?? "") + String(e.stderr ?? ""), status: e.status }
+  }
+  assert.fail(`${tool} was expected to exit non-zero`)
+}
+
+describe("error output carries no customer values (review items 1-3, 8)", () => {
+  it("a staging chunk rejected by a 400 prints status, range and set id, never the chunk text", async () => {
+    // The mock server must live in its own process: execFileSync blocks this process's
+    // event loop, so an in-process server could never answer the tool.
+    const mock = spawn(process.execPath, [
+      "-e",
+      `const http = require("node:http")
+const srv = http.createServer((req, res) => {
+  let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => {
+    if (req.url === "/auth/login") { res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ token: "test-token", expiresAt: 9 })) }
+    else if (req.url === "/staging/sets") { res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ id: "set-mock-1" })) }
+    else { res.statusCode = 400; res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ error: "chunk rejected: " + b })) }
+  })
+})
+srv.listen(0, "127.0.0.1", () => console.log(srv.address().port))`,
+    ], { stdio: ["ignore", "pipe", "ignore"] })
+    const portStr = await new Promise((resolve, reject) => {
+      mock.stdout.on("data", (d) => resolve(String(d).trim()))
+      mock.on("exit", (c) => reject(new Error(`mock died: ${c}`)))
+      setTimeout(() => reject(new Error("mock did not start")), 5000).unref()
+    })
+    try {
+      const file = join(mkdtempSync(join(tmpdir(), "qwb50-")), "accounts.jsonl")
+      writeFileSync(file, accountsFixture.map((r) => JSON.stringify(r)).join("\n") + "\n")
+      const { out, status } = runFailing("vtiger-to-staging.mjs", [file, "mock-reject"], { QWBE_URL: `http://127.0.0.1:${portStr}` })
+      assert.equal(status, 1)
+      assert.match(out, /HTTP 400/)
+      assert.match(out, /lines 1-3/)
+      assert.match(out, /set-mock-1/)
+      // No row value may appear anywhere in the output.
+      for (const row of accountsFixture) {
+        assert.ok(!out.includes(row.accountname))
+        assert.ok(!out.includes(row.account_no))
+        assert.ok(!out.includes(row.email1))
+      }
+      assert.ok(!out.includes("Alpha Trading"))
+    } finally {
+      mock.kill("SIGKILL")
+    }
+  })
+})
+
+// ---- 5. the exporter's stream mode, proven against a fixture DB (review item 4) --------
+
+describe("vtiger exporter streams rows through query().stream() (fixture DB)", () => {
+  it("writes one JSONL line per row and never buffers the result set", async () => {
+    // The mock MariaDB lives in its own process (execFileSync blocks this one's event loop).
+    const mock = spawn(process.execPath, [
+      "-e",
+      `const mysql = require("mysql2")
+const rows = [
+  { vtigerId: 980001, accountid: 980001, account_no: "FIX-DB-1", accountname: "Fixture Db One SRL", employees: 4 },
+  { vtigerId: 980002, accountid: 980002, account_no: "FIX-DB-2", accountname: "Fixture Db Two SRL", employees: null },
+  { vtigerId: 980003, accountid: 980003, account_no: "FIX-DB-3", accountname: "Fixture Db Three SRL", employees: 9 },
+]
+const srv = mysql.createServer((conn) => {
+  conn.serverHandshake({
+    protocolVersion: 10,
+    serverVersion: "5.7.10-mock",
+    connectionId: 1,
+    statusFlags: 2,
+    capabilityFlags: 0xffffff,
+    characterSet: 8,
+    authPluginDataLength: 0,
+    authPluginName: "mysql_native_password",
+  })
+  // The server-side mock keeps the handshake sequence number across the command phase,
+  // which desyncs the client; real MariaDB resets to 0 after every command.
+  const handlePacket = conn.handlePacket.bind(conn)
+  conn.handlePacket = (packet) => {
+    handlePacket(packet)
+    conn._resetSequenceId()
+  }
+  conn.on("query", (query) => {
+    const col = (n) => ({ name: n, orgName: n, catalog: "def", schema: "fixture", table: "t", orgTable: "t", characterSet: 45, columnLength: 64, columnType: 253, flags: 0, decimals: 0 })
+    if (query.startsWith("SHOW COLUMNS")) {
+      conn.writeTextResult([{ Field: "accountid" }, { Field: "cf_638" }], [col("Field"), col("Type")])
+    } else if (query.startsWith("SELECT COUNT")) {
+      conn.writeTextResult([{ n: String(rows.length) }], [col("n")])
+    } else {
+      conn.writeTextResult(rows, [col("vtigerId"), col("accountid"), col("account_no"), col("accountname"), col("employees")])
+    }
+  })
+})
+srv.listen(0, "127.0.0.1", () => console.log(srv._server.address().port))`,
+    ], { stdio: ["ignore", "pipe", "ignore"], cwd: new URL("..", import.meta.url).pathname })
+    const portStr = await new Promise((resolve, reject) => {
+      mock.stdout.on("data", (d) => resolve(String(d).trim()))
+      mock.on("exit", (c) => reject(new Error(`mock db died: ${c}`)))
+      setTimeout(() => reject(new Error("mock db did not start")), 5000).unref()
+    })
+    const fixtureRows = [
+      { vtigerId: 980001, accountid: 980001, account_no: "FIX-DB-1", accountname: "Fixture Db One SRL", employees: 4 },
+      { vtigerId: 980002, accountid: 980002, account_no: "FIX-DB-2", accountname: "Fixture Db Two SRL", employees: null },
+      { vtigerId: 980003, accountid: 980003, account_no: "FIX-DB-3", accountname: "Fixture Db Three SRL", employees: 9 },
+    ]
+    const outDir = mkdtempSync(join(tmpdir(), "qwb50-export-"))
+    try {
+      const out = execFileSync(process.execPath, [join(here, "vtiger-export.mjs"), "accounts", "--write"], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          VTIGER_DB_HOST: "127.0.0.1",
+          VTIGER_DB_PORT: portStr,
+          VTIGER_DB_USER: "fixture",
+          VTIGER_DB_PASSWORD: "fixture",
+          VTIGER_DB_NAME: "fixture",
+          QWB50_EXPORT_DIR: outDir,
+        },
+      })
+      assert.match(out, /rows:\s+3/)
+      const lines = readFileSync(join(outDir, "accounts.jsonl"), "utf8").trim().split("\n")
+      assert.equal(lines.length, 3)
+      // the text protocol returns every column as a string -- the shape, not the types,
+      // is what this test proves
+      assert.deepEqual(JSON.parse(lines[2]), {
+        vtigerId: "980003", accountid: "980003", account_no: "FIX-DB-3", accountname: "Fixture Db Three SRL", employees: "9",
+      })
+    } finally {
+      mock.kill("SIGKILL")
+      rmSync(outDir, { recursive: true, force: true })
+    }
   })
 })
