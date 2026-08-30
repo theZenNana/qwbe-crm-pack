@@ -17,7 +17,7 @@ import {
   waitForText,
   waitForUrl,
 } from "./lib.mjs"
-import { CITY_BASELINE, CONTACT_LINKED, ORG_A, ORG_B } from "./seed.mjs"
+import { CONTACT_LINKED, ORG_A, ORG_B } from "./seed.mjs"
 
 // Read at call time: the runner sets CONFIG.frontendPort after picking a free port.
 const FE = () => `http://localhost:${CONFIG.frontendPort}`
@@ -72,7 +72,7 @@ async function settle(text, timeout = 30_000) {
 }
 
 // --- 1. login with the correct credentials lands on the identity page -----------
-export async function scenarioLogin(api) {
+export async function scenarioLogin() {
   const name = "login lands on the identity page"
   await open("/login")
   await settle("Sign in")
@@ -286,12 +286,12 @@ export async function scenarioLogout() {
 
 /** Only the login scenario — used when the seed cannot get a session at all. */
 export async function scenarioLoginOnly() {
-  await scenarioLogin(null)
+  await scenarioLogin()
 }
 
 export async function runAll(api, seed) {
   const verdicts = []
-  verdicts.push(await scenarioLogin(api))
+  verdicts.push(await scenarioLogin())
   if (!verdicts[0]) {
     // Without a session every later scenario would only test the login page.
     record("later scenarios (list, inline edit, non-editable, navigation, logout)", "SKIP", "login failed; without a session the UI cannot be exercised")
