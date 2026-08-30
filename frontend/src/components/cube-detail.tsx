@@ -15,6 +15,7 @@ import {
   hrefForRelation,
   metadataApiPath,
   routeOf,
+  resolveRelationTitle,
   titleOf,
 } from "@/lib/cube"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -91,12 +92,10 @@ export function CubeDetail({
                      value !== null &&
                      value !== undefined &&
                      hrefForRelation(field.relation.target, String(value)) ? (
-                      <Link
-                        className="underline"
-                        href={hrefForRelation(field.relation.target, String(value))!}
-                      >
-                        {String(value)}
-                      </Link>
+                      <RelationLinkValue
+                        target={field.relation.target}
+                        id={String(value)}
+                      />
                     ) : field.type === "boolean" ? (
                       value ? (
                         "yes"
@@ -123,5 +122,27 @@ export function CubeDetail({
         </section>
       ))}
     </div>
+  )
+}
+
+// A relation on the detail page shows the target row's title, resolved through
+// the target cube's own metadata and row endpoint (falling back to the raw id
+// when either request fails), and links to the target's detail page when this
+// app has a route for it.
+function RelationLinkValue({ target, id }: { target: string; id: string }) {
+  const [title, setTitle] = useState<string | null>(null)
+  useEffect(() => {
+    let alive = true
+    resolveRelationTitle(target, id).then((t) => {
+      if (alive) setTitle(t)
+    })
+    return () => {
+      alive = false
+    }
+  }, [target, id])
+  return (
+    <Link className="underline" href={hrefForRelation(target, id)!}>
+      {title ?? id}
+    </Link>
   )
 }
