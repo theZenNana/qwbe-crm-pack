@@ -1,0 +1,283 @@
+// Metadata-driven list and detail logic for the CRM frontend (QWB-49).
+//
+// The one design rule: adding a field to a cube must appear in the list without a
+// line of frontend code. Everything here reads the published cube metadata
+// (GET /catalog/{cube}/metadata) and the cube's own list endpoint; no module in
+// this frontend names a field of a specific cube.
+//
+// All qwbe calls go through the server-side proxy (/api/qwbe/...), so the token
+// stays in the httpOnly cookie and never reaches browser-visible code.
+
+// The published field metadata (qwbe core/src/metadata/schemas.ts).
+export type FieldMetadata = {
+  name: string
+  label: string
+  type: string
+  required: boolean
+  editable: boolean
+  sortable: boolean
+  searchable: boolean
+  nullable: boolean
+  enum: string[] | null
+  relation: { target: string; entity: string; summary: string | null } | null
+}
+
+export type CubeMetadata = {
+  cube: string
+  entity: string | null
+  version: string | null
+  schemaHash: string
+  fields: FieldMetadata[]
+}
+
+// A page as the qwbe list contract returns it (PageOf). `total` is optional here
+// because the UI must survive a response without it: paging then falls back to
+// what the current page proves (offset + rows.length), and the "of N" count is
+// dropped instead of disabling Next forever.
+export type PageOf<T> = {
+  rows: T[]
+  total?: number
+  offset: number
+  limit: number
+}
+
+export type Row = Record<string, unknown>
+
+// The query-string keys qwbe's list contract owns. A cube field with one of
+// these names must never be sent as a bare filter key, or it would override
+// paging.
+const RESERVED_QUERY_KEYS = new Set(["offset", "limit", "sortBy", "descending"])
+
+export type ListParams = {
+  offset?: number
+  limit?: number
+  sortBy?: string
+  descending?: boolean
+  // Field filters (server-side equality, e.g. accountId on contacts). Keys are
+  // field NAMES from the metadata, never hard-coded per entity here.
+  filters?: Record<string, string>
+}
+
+// The single first path segment a cube serves under. qwbe mounts a child cube
+// ("crm/accounts") at "/<leaf>" (core/src/kernel/routes.ts routePrefixOf; a leaf
+// that collides with a standalone cube is mounted as "<parent>-<name>"). The
+// HTTP prefix therefore comes from the leaf, never from the full cube name.
+export function httpPrefixOf(cube: string): string {
+  return cube.includes("/") ? cube.split("/").pop()! : cube
+}
+
+// Proxy path for a cube-relative qwbe path: the cube "crm/accounts" becomes
+// /api/qwbe/accounts, because that is the prefix the cube actually serves at.
+export function cubeApiPath(cube: string, suffix = ""): string {
+  return `/api/qwbe/${httpPrefixOf(cube)}${suffix}`
+}
+
+// Metadata is under /catalog/{cube}/metadata and a child cube name
+// ("crm/accounts") is a single path parameter, so it must be percent-encoded.
+export function metadataApiPath(cube: string): string {
+  return `/api/qwbe/catalog/${encodeURIComponent(cube)}/metadata`
+}
+
+// Builds the query string of a list request. Paging and sorting go to qwbe
+// (server-side paging end to end); there is no client-side slice anywhere.
+// A filter key that collides with a paging key is skipped rather than sent, so
+// a field named "limit" can never override paging. A test asserts both.
+export function listQueryString(params: ListParams): string {
+  const q = new URLSearchParams()
+  if (params.offset !== undefined) q.set("offset", String(params.offset))
+  if (params.limit !== undefined) q.set("limit", String(params.limit))
+  if (params.sortBy !== undefined) q.set("sortBy", params.sortBy)
+  if (params.descending) q.set("descending", "true")
+  for (const [field, value] of Object.entries(params.filters ?? {})) {
+    if (value !== "" && !RESERVED_QUERY_KEYS.has(field)) q.set(field, value)
+  }
+  return q.toString()
+}
+
+export function listApiPath(cube: string, params: ListParams): string {
+  const qs = listQueryString(params)
+  return `${cubeApiPath(cube)}${qs ? `?${qs}` : ""}`
+}
+
+// Columns are DERIVED from metadata. The default column set is metadata-driven
+// too: a field absent from the create payload (editable: false) is a backend
+// bookkeeping column (id, type, version, deleted, createdAt) and is hidden by
+// default, so a 60k-row list does not render five dead columns per row.
+export type ColumnSpec = {
+  field: FieldMetadata
+  sortable: boolean
+  editable: boolean
+  visible: boolean
+}
+
+export function columnsFromFields(fields: FieldMetadata[]): ColumnSpec[] {
+  return fields.map((field) => ({
+    field,
+    sortable: field.sortable,
+    editable: field.editable,
+    visible: field.editable,
+  }))
+}
+
+// A cell is editable exactly when the metadata says so. A field that is not
+// editable refuses editing, whatever the caller asks.
+export function canEdit(field: FieldMetadata): boolean {
+  return field.editable
+}
+
+// The sort a column click produces: undefined for a column the metadata does
+// not mark sortable, so a non-sortable header can never trigger a request.
+export function sortRequestFor(
+  column: ColumnSpec,
+  currentSortBy: string | undefined,
+  currentDescending: boolean,
+): { sortBy: string; descending: boolean } | undefined {
+  if (!column.sortable) return undefined
+  if (currentSortBy === column.field.name) {
+    return { sortBy: column.field.name, descending: !currentDescending }
+  }
+  return { sortBy: column.field.name, descending: false }
+}
+
+// Extracts the human-readable message from a qwbe error response. A validation
+// failure is a 400 whose body carries `issues` (per-field messages) and a
+// `message`; the per-field message wins ONLY when its path names the edited
+// field -- an issue about a different field must not be shown in this cell.
+export function errorMessage(body: unknown, fieldName?: string): string {
+  if (typeof body === "string" && body.length > 0) return body
+  if (body && typeof body === "object") {
+    const b = body as { message?: unknown; issues?: unknown }
+    if (Array.isArray(b.issues) && b.issues.length > 0) {
+      const forField = b.issues.find(
+        (i) =>
+          i &&
+          typeof i === "object" &&
+          Array.isArray((i as { path?: unknown[] }).path) &&
+          (i as { path: unknown[] }).path[0] === fieldName &&
+          typeof (i as { message?: unknown }).message === "string" &&
+          ((i as { message: string }).message as string).length > 0,
+      ) as { message: string } | undefined
+      if (forField) return forField.message
+    }
+    if (typeof b.message === "string" && b.message.length > 0) return b.message
+  }
+  return "the change was refused"
+}
+
+// The body of a failed response, tolerating non-JSON: qwbe's message wins, but
+// a plain-text error body must not crash the parser and lose the text.
+export async function errorBody(response: Response): Promise<unknown> {
+  const text = await response.text().catch(() => "")
+  if (text.length === 0) return undefined
+  try {
+    return JSON.parse(text)
+  } catch {
+    return text
+  }
+}
+
+// The frontend routes this app actually has. A relation whose target has no
+// route renders as plain text instead of a dead link.
+const RELATION_ROUTES: Record<string, string> = {
+  "crm/accounts": "/accounts",
+  "crm/contacts": "/contacts",
+  accounts: "/accounts",
+  contacts: "/contacts",
+}
+
+// Builds the link for a related row, or null when the target cube has no
+// frontend route (for example crm/contracts): the caller then renders text.
+export function hrefForRelation(target: string, id: string): string | null {
+  const route = RELATION_ROUTES[target]
+  return route ? `${route}/${id}` : null
+}
+
+// The leaf route segment of a cube, used to link from a contact to its
+// organization detail page and back.
+export function routeOf(cube: string): string {
+  return `/${cube.split("/").pop()}`
+}
+
+// The human title of a row, derived from metadata: the value of the first
+// required field (name on both CRM cubes), falling back to the id.
+export function titleOf(meta: CubeMetadata, row: Row): string {
+  const titleField = meta.fields.find((f) => f.required)
+  const value = titleField ? row[titleField.name] : undefined
+  return value === undefined || value === null ? String(row.id) : String(value)
+}
+
+// Resolves the display title of a related id through the target cube's own
+// surface: its metadata (for the title field) and its row endpoint. Falls back
+// to the raw id when either request fails -- a cell never blocks on it.
+const metaCache = new Map<string, CubeMetadata>()
+
+export async function resolveRelationTitle(
+  target: string,
+  id: string,
+  doFetch: typeof fetch = fetch,
+): Promise<string> {
+  try {
+    let meta = metaCache.get(target)
+    if (!meta) {
+      const r = await doFetch(metadataApiPath(target))
+      if (!r.ok) return id
+      meta = (await r.json()) as CubeMetadata
+      metaCache.set(target, meta)
+    }
+    const r = await doFetch(cubeApiPath(target, `/${id}`))
+    if (!r.ok) return id
+    const row = (await r.json()) as Row
+    return titleOf(meta, row)
+  } catch {
+    return id
+  }
+}
+
+// The value a PATCH carries for one edited cell, derived from the field
+// metadata: an enum stays a string (the Select offers the published values), a
+// boolean becomes a real boolean, numbers become numbers, and an empty string
+// is null only for a nullable field -- for a non-nullable field the empty
+// string travels as-is so qwbe refuses it with its own message.
+export function coerce(field: FieldMetadata, value: string): unknown {
+  if (field.type === "boolean") {
+    if (value === "") return field.nullable ? null : false
+    return value === "true" || value === "yes" || value === "1"
+  }
+  if (value === "") return field.nullable ? null : value
+  if (field.enum && field.enum.length > 0) return value
+  if (field.type === "integer" || field.type === "number") {
+    const n = Number(value)
+    return Number.isFinite(n) ? n : value
+  }
+  return value
+}
+
+export type SaveResult =
+  | { status: "unchanged" }
+  | { status: "saved"; field: string; value: unknown }
+  | { status: "refused"; message: string }
+
+// One inline edit, as a pure async function so the request path is testable
+// without a DOM: PATCHes exactly the edited key, merges ONLY that key from the
+// response (an out-of-order stale body must not overwrite newer columns), and
+// returns qwbe's own message -- matched to the edited field -- on refusal.
+export async function saveCell(opts: {
+  rowPath: string
+  field: FieldMetadata
+  current: unknown
+  next: string
+  doFetch: typeof fetch
+}): Promise<SaveResult> {
+  const { rowPath, field, current, next, doFetch } = opts
+  if (next === String(current ?? "")) return { status: "unchanged" }
+  const response = await doFetch(rowPath, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ [field.name]: coerce(field, next) }),
+  })
+  if (!response.ok) {
+    return { status: "refused", message: errorMessage(await errorBody(response), field.name) }
+  }
+  const saved = (await response.json()) as Row
+  return { status: "saved", field: field.name, value: saved[field.name] }
+}
