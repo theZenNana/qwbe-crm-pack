@@ -21,6 +21,10 @@ export const isForbiddenPort = (p) => p === 4500 || p === 4510
 export const CONFIG = {
   qwbeRepo: process.env.QWBE_REPO ?? "/home/lucian/Projects/Qwbe/qwbe",
   crmPack: process.env.CRM_PACK ?? "/home/lucian/Projects/Qwbe/plugins/crm-pack",
+  // The customfields pack is a separate repository (QWB-46); it owns the
+  // definition endpoints the custom-field UI talks to.
+  customFieldsPack:
+    process.env.CUSTOMFIELDS_PACK ?? "/home/lucian/Projects/Qwbe/plugins/customfields-pack",
   workDir: process.env.QWBE_E2E_WORK ?? "/tmp/qwbe-e2e",
   dataDir: process.env.QWBE_E2E_DATA ?? "/tmp/qwbe-e2e-data",
   resultsDir:
@@ -38,7 +42,7 @@ export const CONFIG = {
   // `permissions` is the entity-permission provider: without it every create answers 500 with
   // `PermissionInvalid: entity permissions provider unavailable` and nothing can be seeded.
   mounted:
-    "auth,account,permissions,settings,cli,catalog,links,crm,crm/accounts,crm/contacts,crm/contracts",
+    "auth,account,permissions,settings,cli,catalog,links,crm,crm/accounts,crm/contacts,crm/contracts,customfields",
 }
 
 // ---------------------------------------------------------------------------

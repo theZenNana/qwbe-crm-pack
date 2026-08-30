@@ -100,10 +100,18 @@ cpSync(CONFIG.crmPack, join(CONFIG.workDir, "core", "plugins", "crm-pack"), {
   recursive: true,
   filter: (src) => !src.includes(`${CONFIG.crmPack}/node_modules/.cache`),
 })
-const coreLink = join(CONFIG.workDir, "core", "plugins", "crm-pack", "node_modules", "qwbe-core")
-if (existsSync(coreLink)) {
-  rmSync(coreLink)
-  execSync(`ln -s ../../.. ${coreLink}`)
+// Same treatment for the customfields pack (QWB-52): a separate repository,
+// installed the same way, its qwbe-core symlink repointed at THIS copy.
+cpSync(CONFIG.customFieldsPack, join(CONFIG.workDir, "core", "plugins", "customfields-pack"), {
+  recursive: true,
+  filter: (src) => !src.includes(`${CONFIG.customFieldsPack}/node_modules/.cache`),
+})
+for (const packDir of ["crm-pack", "customfields-pack"]) {
+  const coreLink = join(CONFIG.workDir, "core", "plugins", packDir, "node_modules", "qwbe-core")
+  if (existsSync(coreLink)) {
+    rmSync(coreLink)
+    execSync(`ln -s ../../.. ${coreLink}`)
+  }
 }
 log("== install dependencies (qwbe core) ==")
 // npm run propagates npm_config_* (including the global allow-scripts policy) into this

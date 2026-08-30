@@ -309,6 +309,141 @@ export async function scenarioLogout() {
   return record(name, pass ? "PASS" : "RED", pass ? "/me redirects to /login after logout" : "/me still reachable", "06-final.png")
 }
 
+
+// --- 7. a custom field defined in the UI, used, and deleted (QWB-52) -------------
+const CF_NAME = "e2eChannel"
+const CF_LABEL = "E2E Channel"
+const CF_OPTIONS = "email, phone, event"
+
+export async function scenarioCustomField() {
+  const name = "custom field defined in the UI appears, is set inline, and disappears on delete"
+  await open("/contacts")
+  await settle(CONTACT_LINKED)
+  let snap = snapshot()
+
+  // 1. open the definitions panel
+  const panelBtn = refFor(snap.refs, (n) => n === "Custom fields")
+  if (!panelBtn) {
+    shot("07-panel-RED", { full: true })
+    return record(name, "RED", "no Custom fields button on the contacts list", "07-panel-RED.png")
+  }
+  click(panelBtn)
+  const panelOpen = await waitForText("Fields defined at runtime", 15_000)
+  snap = snapshot()
+  if (!panelOpen) {
+    shot("07-panel-RED", { full: true })
+    return record(name, "RED", "definitions panel did not open", "07-panel-RED.png")
+  }
+  shot("07-panel-open")
+
+  // 2. define a select field
+  const nameBox = Object.entries(snap.refs).find(([, v]) => v.role === "textbox" && v.name === "Name")?.[0]
+  const labelBox = Object.entries(snap.refs).find(([, v]) => v.role === "textbox" && v.name === "Label")?.[0]
+  if (!nameBox || !labelBox) {
+    shot("07-define-RED", { full: true })
+    return record(name, "RED", "definition form inputs not found", "07-define-RED.png")
+  }
+  click(nameBox)
+  keypress("ctrl+a")
+  type(CF_NAME)
+  click(labelBox)
+  keypress("ctrl+a")
+  type(CF_LABEL)
+  // Type select: open the combobox and pick "select".
+  const typeCombo = Object.entries(snap.refs).find(([, v]) => v.role === "combobox" && /type/i.test(v.name ?? ""))?.[0]
+  if (!typeCombo) {
+    shot("07-define-RED", { full: true })
+    return record(name, "RED", "type combobox not found in the definition form", "07-define-RED.png")
+  }
+  click(typeCombo)
+  snap = snapshot()
+  const selectOption = Object.entries(snap.refs).find(([, v]) => v.role === "option" && v.name === "select")?.[0]
+  if (!selectOption) {
+    shot("07-define-RED", { full: true })
+    return record(name, "RED", "the select option is missing from the type combobox", "07-define-RED.png")
+  }
+  click(selectOption)
+  await new Promise((r) => setTimeout(r, 500))
+  snap = snapshot()
+  // The options input appears only for type=select (metadata-driven form).
+  const optionsBox = Object.entries(snap.refs).find(([, v]) => v.role === "textbox" && /Options/.test(v.name ?? ""))?.[0]
+  if (!optionsBox) {
+    shot("07-define-RED", { full: true })
+    return record(name, "RED", "options input did not appear for type select", "07-define-RED.png")
+  }
+  click(optionsBox)
+  type(CF_OPTIONS)
+  snap = snapshot()
+  const addBtn = refFor(snap.refs, "Add field")
+  if (!addBtn) {
+    shot("07-define-RED", { full: true })
+    return record(name, "RED", "Add field button not found", "07-define-RED.png")
+  }
+  click(addBtn)
+  // The definition appears in the panel list AND the column appears in the
+  // table (the metadata is re-read after the definition change).
+  const columnShown = await waitForText(CF_LABEL, 15_000)
+  snap = snapshot()
+  shot("07-column-appears")
+  if (!columnShown) {
+    shot("07-column-RED", { full: true })
+    return record(name, "RED", `column ${CF_LABEL} did not appear after defining`, "07-column-RED.png")
+  }
+
+  // 3. set it inline on the seeded contact
+  const editBtn = refFor(snap.refs, `Edit ${CF_LABEL}`)
+  if (!editBtn) {
+    shot("07-inline-RED", { full: true })
+    return record(name, "RED", "no inline edit affordance on the custom column", "07-inline-RED.png")
+  }
+  click(editBtn)
+  snap = snapshot()
+  const cellCombo = Object.entries(snap.refs).find(([, v]) => v.role === "combobox" && v.name === CF_LABEL)?.[0]
+  if (!cellCombo) {
+    shot("07-inline-RED", { full: true })
+    return record(name, "RED", "the custom cell did not open a select", "07-inline-RED.png")
+  }
+  click(cellCombo)
+  snap = snapshot()
+  const emailOption = Object.entries(snap.refs).find(([, v]) => v.role === "option" && v.name === "email")?.[0]
+  if (!emailOption) {
+    shot("07-inline-RED", { full: true })
+    return record(name, "RED", "the custom select does not offer the defined options", "07-inline-RED.png")
+  }
+  click(emailOption)
+  const saved = await waitForText("email", 15_000)
+  snap = snapshot()
+  shot("07-inline-saved")
+  if (!saved) {
+    shot("07-inline-RED", { full: true })
+    return record(name, "RED", "the chosen option did not appear in the cell", "07-inline-RED.png")
+  }
+
+  // 4. delete the definition; the column disappears on the next metadata read
+  const deleteBtn = refFor(snap.refs, `Delete ${CF_LABEL}`)
+  if (!deleteBtn) {
+    shot("07-delete-RED", { full: true })
+    return record(name, "RED", "delete button for the definition not found", "07-delete-RED.png")
+  }
+  click(deleteBtn)
+  // The column header must vanish from the snapshot.
+  let columnGone = true
+  const deadline = Date.now() + 15_000
+  for (;;) {
+    snap = snapshot()
+    columnGone = !snap.text.includes(CF_LABEL)
+    if (columnGone || Date.now() >= deadline) break
+    await new Promise((r) => setTimeout(r, 500))
+  }
+  shot("07-column-gone")
+  return record(
+    name,
+    columnGone ? "PASS" : "RED",
+    columnGone ? "column appeared, was set inline, and disappeared after the definition was deleted" : `column ${CF_LABEL} still present after delete`,
+    "07-column-gone.png",
+  )
+}
+
 /** Only the login scenario — used when the seed cannot get a session at all. */
 export async function scenarioLoginOnly() {
   await scenarioLogin()
@@ -326,6 +461,7 @@ export async function runAll(api, seed) {
   verdicts.push(await scenarioInlineEdit())
   verdicts.push(await scenarioNonEditable(api))
   verdicts.push(await scenarioNavigation(seed))
+  verdicts.push(await scenarioCustomField())
   verdicts.push(await scenarioLogout())
   return verdicts
 }
