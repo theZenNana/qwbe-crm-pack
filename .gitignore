@@ -21,3 +21,6 @@ node_modules/
 *.jsonl
 *-idmap.json
 vtiger-export/
+
+# debugging leftovers, never commit
+.mockdb.tmp.*
