@@ -43,7 +43,41 @@ npm run dev                  # http://localhost:3000
 npm test        # unit tests: cookie, login, proxy logic and the metadata-driven list logic (node --test)
 npm run lint
 npm run typecheck
+npm run e2e     # end-to-end scenarios through the Orca browser (see below)
 ```
+
+## End-to-end scenarios through the Orca browser (QWB-51)
+
+`npm run e2e` runs one command end to end (`e2e/run-e2e.mjs`):
+
+1. Copies the merged qwbe platform from its repository with `git archive origin/main` into
+   `/tmp/qwbe-e2e` (the qwbe checkout itself is never touched) and installs the crm-pack
+   cubes under `core/plugins/crm-pack` the way `plugins/crm-pack/probes/crm.mjs` does.
+2. Starts qwbe and this frontend on free ports (never 4500/4510), each with `nohup` from
+   inside the runner, records the PIDs, and polls both URLs before any browser step. If
+   either server does not come up, the run stops with a clear message.
+3. Seeds, through the qwbe API with a real login, two organizations and two contacts (one
+   linked through `accountId`). The seed is idempotent and its teardown deletes exactly the
+   rows it created; all names are obviously fake.
+4. Drives the real UI through the Orca browser (`orca` CLI): login, the organization list
+   with sorting and searching, an inline edit on an editable field, the refused inline edit
+   on a non-editable field, organization -> contact -> back, and logout. Every scenario
+   leaves at least one screenshot and a PASS/RED/SKIP line.
+5. Tears down: seed rows deleted, servers killed by PID, work directory removed. Exits
+   non-zero if any scenario is not PASS.
+
+Results (screenshots plus `results.md`) land in
+`/home/lucian/Projects/wiki/aplicatii/qwbe/crm-pack/e2e/<YYYY-MM-DD>/`.
+
+What it needs: the Orca app running locally with its runtime ready (`orca status --json`
+must report `state: "ready"`), the `orca` CLI shim at
+`/home/lucian/.config/orca/linux-orca-cli-shim/orca` (override with `ORCA_CLI`), and the
+qwbe and crm-pack checkouts at their default paths (override with `QWBE_REPO` and
+`CRM_PACK`). It runs only on the Orca host.
+
+A refused login (no qwbe session) is not faked green: the login scenario is driven anyway
+and recorded RED with screenshots, the session-bound scenarios are recorded SKIP, and the
+runner exits non-zero.
 
 The list tests stub qwbe entirely: they prove that columns are derived from metadata
 (a field added to the stub appears without touching any component), that non-editable
