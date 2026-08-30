@@ -5,6 +5,7 @@
 // for the non-editable-field scenario; everything else goes through the real UI.
 
 import {
+  setPage,
   CONFIG,
   click,
   keypress,
@@ -27,6 +28,8 @@ async function open(path) {
   const r = orca("tab", "create", "--url", `${FE()}${path}`)
   orca("tab", "switch", "--page", r.browserPageId, "--focus")
   tabs.push(r.browserPageId)
+  // Address this tab by id from here on, so no other tab can answer for it.
+  setPage(r.browserPageId)
   // The snapshot target must actually BE this tab: with stale tabs around, create/switch
   // can lose the race, so poll the origin and re-switch until it matches (or fail loudly).
   for (let i = 0; i < 15; i++) {
@@ -91,9 +94,13 @@ export async function scenarioLogin() {
   const submit = refFor(snap.refs, (n) => n === "Sign in")
   click(submit)
   const landed = await waitForUrl(".*/me.*")
+  // Assert the text with Orca's own wait, not with the snapshot string: the snapshot is an
+  // accessibility tree that does not always carry a card's description text, so a page that
+  // plainly reads "Signed in as admin" was scored RED three runs in a row.
+  const textShown = await waitForText("Signed in as", 20_000)
   snap = snapshot()
   shot("01-after-login")
-  const identityShown = landed && snap.origin.endsWith("/me") && snap.text.includes("Signed in as")
+  const identityShown = landed && snap.origin.endsWith("/me") && textShown
   return record(
     name,
     identityShown ? "PASS" : "RED",
