@@ -248,12 +248,50 @@ try {
     `http=${badAccount.status}`,
   )
 
+  // A well-formed but NONEXISTENT accountId. Today the kernel offers cubes no cross-cube
+  // read, so the refusal is not implementable yet: the create SUCCEEDS and this assertion
+  // pins today's real behaviour. This is the assertion to FLIP to 400 once the
+  // kernel-enforced relation lands (shepherd's separate change in the qwbe repo).
+  const ghostAccount = await api.call("/contacts", {
+    method: "POST",
+    headers: admin.headers,
+    body: JSON.stringify({ name: "Ghost Link", email: "ghost@example.com", accountId: "acc-doesnotexist" }),
+  })
+  score.check(
+    "a nonexistent accountId is still accepted (kernel relation pending) — FLIP to 400 when it lands",
+    ghostAccount.status === 200 && ghostAccount.body?.accountId === "acc-doesnotexist",
+    `http=${ghostAccount.status}`,
+  )
+
+  // The move: PATCH /contacts/:id changes the one truth, including unlinking.
+  const movedContact = await api.call(`/contacts/${contact?.id}`, {
+    method: "PATCH",
+    headers: admin.headers,
+    body: JSON.stringify({ accountId: org?.id }),
+  })
+  score.check(
+    "PATCH /contacts/:id moves a contact to another organization",
+    movedContact.status === 200 && movedContact.body?.accountId === org?.id,
+    `http=${movedContact.status} accountId=${movedContact.body?.accountId}`,
+  )
+  const unlinkedContact = await api.call(`/contacts/${contact?.id}`, {
+    method: "PATCH",
+    headers: admin.headers,
+    body: JSON.stringify({ accountId: null }),
+  })
+  score.check(
+    "PATCH /contacts/:id unlinks a contact (accountId null)",
+    unlinkedContact.status === 200 && unlinkedContact.body?.accountId === null,
+    `http=${unlinkedContact.status}`,
+  )
+
   // ---- independence: each cube serves while the others are absent -----------------
   // QWBE_MOUNTED restricts the mount set; boot twice more, one cube at a time. This is the
   // decided minimal relation made observable: neither cube needs the other to start.
   for (const [only, route] of [
     ["crm/contacts", "/contacts"],
     ["crm/contracts", "/contracts"],
+    ["crm/accounts", "/accounts"],
   ]) {
     const p2 = await freePort()
     const d2 = scratchDataDir(`crm-only-${only.replace("/", "-")}`)
