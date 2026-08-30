@@ -217,11 +217,19 @@ export function shot(name, { full = false } = {}) {
 export function qwbeClient(port) {
   const base = `http://127.0.0.1:${port}`
   let token = null
-  const call = async (path, options = {}) => {
+  const call = async (path, options = {}, attempt = 0) => {
     const headers = { ...(options.headers ?? {}) }
     if (token) headers.authorization = `Bearer ${token}`
     if (options.body !== undefined) headers["content-type"] = "application/json"
-    const r = await fetch(base + path, { ...options, headers, body: options.body === undefined ? undefined : JSON.stringify(options.body) })
+    let r
+    try {
+      r = await fetch(base + path, { ...options, headers, body: options.body === undefined ? undefined : JSON.stringify(options.body) })
+    } catch (e) {
+      // qwbe closes idle keep-alive connections; undici can then reuse a dead
+      // socket and fail with `fetch failed`. The retry opens a fresh socket.
+      if (attempt < 2) return call(path, options, attempt + 1)
+      throw e
+    }
     const text = await r.text()
     let body
     try {
