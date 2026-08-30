@@ -26,6 +26,7 @@ import {
   hrefForRelation,
   listApiPath,
   metadataApiPath,
+  titleOf,
 } from "@/lib/cube"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -258,13 +259,6 @@ export function CubeList({
 // relation (equality on the link). qwbe publishes no free-text search route.
 function searchField(meta: CubeMetadata): FieldMetadata | null {
   return meta.fields.find((f) => f.searchable && f.relation) ?? null
-}
-
-// The human title of a related row: the first required field's value, or the id.
-export function titleOf(meta: CubeMetadata, row: Row): string {
-  const titleField = meta.fields.find((f) => f.required)
-  const value = titleField ? row[titleField.name] : undefined
-  return value === undefined || value === null ? String(row.id) : String(value)
 }
 
 function RelationSearch({

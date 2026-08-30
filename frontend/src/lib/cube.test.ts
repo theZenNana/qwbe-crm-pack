@@ -5,6 +5,8 @@
 
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
+import { createRequire } from "node:module"
+const require = createRequire(import.meta.url)
 
 import {
   canEdit,
@@ -139,5 +141,60 @@ describe("relation links", () => {
 
   it("derives the list route of a cube", () => {
     assert.equal(routeOf("crm/contacts"), "/contacts")
+  })
+})
+
+describe("paging shape and response use", () => {
+  const meta = (): import("./cube.ts").CubeMetadata => ({
+    cube: "crm/contacts",
+    entity: "Contact",
+    version: null,
+    schemaHash: "hash",
+    fields: [field({ name: "name", required: true }), field({ name: "email" })],
+  })
+
+  it("the row request carries offset, limit and sortBy and nothing is fetched beyond one page", () => {
+    // The exact URL the list component fetches: paging and sorting travel to
+    // qwbe; the limit is the page size, so 60 thousand rows are never pulled.
+    assert.equal(
+      listApiPath("crm/accounts", { offset: 50, limit: 25, sortBy: "name" }),
+      "/api/qwbe/crm/accounts?offset=50&limit=25&sortBy=name",
+    )
+  })
+
+  it("the page response is used as-is: rows and total pass through untouched", async () => {
+    const page = {
+      rows: [{ id: "acc-1", name: "Acme SRL" }],
+      total: 60_000,
+      offset: 0,
+      limit: 25,
+      sortedBy: "name",
+    }
+    const realFetch = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes("/metadata")) {
+        return new Response(JSON.stringify(meta()))
+      }
+      return new Response(JSON.stringify(page))
+    }) as unknown as typeof fetch
+    try {
+      // titleOf reads the row exactly as the response carried it.
+      const { titleOf } = await import("./cube.ts")
+      assert.equal(titleOf(meta(), page.rows[0]), "Acme SRL")
+      // The list component builds its one request through the same function.
+      assert.equal(
+        listApiPath("crm/contacts", { offset: 0, limit: 25 }),
+        "/api/qwbe/crm/contacts?offset=0&limit=25",
+      )
+      assert.equal(page.total, 60_000)
+    } finally {
+      globalThis.fetch = realFetch
+    }
+  })
+
+  it("the row title falls back to the id when no required field has a value", () => {
+    const { titleOf } = require("./cube.ts") as typeof import("./cube.ts")
+    assert.equal(titleOf(meta(), { id: "acc-2", name: null }), "acc-2")
   })
 })

@@ -8,11 +8,18 @@
 import Link from "next/link"
 import { useEffect, useState } from "react"
 
-import { type CubeMetadata, type Row, cubeApiPath, hrefForRelation, metadataApiPath, routeOf } from "@/lib/cube"
+import {
+  type CubeMetadata,
+  type Row,
+  cubeApiPath,
+  hrefForRelation,
+  metadataApiPath,
+  routeOf,
+  titleOf,
+} from "@/lib/cube"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
-import { titleOf } from "@/components/cube-list"
 import { CubeList } from "@/components/cube-list"
 
 export type ChildList = {

@@ -134,3 +134,11 @@ export function hrefForRelation(target: string, id: string): string {
 export function routeOf(cube: string): string {
   return `/${cube.split("/").pop()}`
 }
+
+// The human title of a row, derived from metadata: the value of the first
+// required field (name on both CRM cubes), falling back to the id.
+export function titleOf(meta: CubeMetadata, row: Row): string {
+  const titleField = meta.fields.find((f) => f.required)
+  const value = titleField ? row[titleField.name] : undefined
+  return value === undefined || value === null ? String(row.id) : String(value)
+}
