@@ -12,6 +12,7 @@ import {
   type CubeMetadata,
   type Row,
   cubeApiPath,
+  customValueOf,
   hrefForRelation,
   metadataApiPath,
   routeOf,
@@ -81,7 +82,10 @@ export function CubeDetail({
         </CardHeader>
         <CardContent className="flex flex-col">
           {meta.fields.map((field, index) => {
-            const value = row[field.name]
+            // Custom fields read their value from the row's `custom`
+            // sub-object; an orphan value has no published field and simply
+            // never reaches this loop.
+            const value = customValueOf(row, field)
             return (
               <div key={field.name}>
                 {index > 0 && <Separator />}
@@ -97,11 +101,9 @@ export function CubeDetail({
                         id={String(value)}
                       />
                     ) : field.type === "boolean" ? (
-                      value ? (
-                        "yes"
-                      ) : (
-                        "no"
-                      )
+                      value
+                        ? "yes"
+                        : "no"
                     ) : (
                       (value ?? "—")?.toString()
                     )}

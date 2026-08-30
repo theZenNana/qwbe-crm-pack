@@ -21,6 +21,8 @@ import {
   type Row,
   canEdit,
   columnsFromFields,
+  customValueOf,
+  renderKindOf,
   cubeApiPath,
   hrefForRelation,
   rowHref,
@@ -32,6 +34,7 @@ import {
   titleOf,
 } from "@/lib/cube"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -414,7 +417,9 @@ function Cell({
   onSave: (value: string) => void
 }) {
   const field = column.field
-  const value = row[field.name]
+  // The value wherever the backend keeps it: a custom field's value rides in
+  // the row's `custom` sub-object, a static field's at the top level.
+  const value = customValueOf(row, field)
   const key = `${String(row.id)}:${field.name}`
   const editing = edit?.id === String(row.id) && edit.field === field.name
 
@@ -442,7 +447,7 @@ function Cell({
   return (
     <div className="flex flex-col gap-1">
       {editing ? (
-        field.enum && field.enum.length > 0 ? (
+        renderKindOf(field) === "select" ? (
           <Select
             value={edit.value}
             onValueChange={(v) => {
@@ -455,13 +460,23 @@ function Cell({
             </SelectTrigger>
             <SelectContent>
               {field.nullable && <SelectItem value="">—</SelectItem>}
-              {field.enum.map((v) => (
+              {field.enum!.map((v) => (
                 <SelectItem key={v} value={v}>
                   {v}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
+        ) : renderKindOf(field) === "checkbox" ? (
+          <Checkbox
+            autoFocus
+            aria-label={field.label}
+            checked={edit.value === "true"}
+            onCheckedChange={(checked) => {
+              setEdit(null)
+              onSave(checked ? "true" : "false")
+            }}
+          />
         ) : (
           <Input
             autoFocus

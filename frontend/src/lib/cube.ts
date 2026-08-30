@@ -20,6 +20,9 @@ export type FieldMetadata = {
   nullable: boolean
   enum: string[] | null
   relation: { target: string; entity: string; summary: string | null } | null
+  // QWB-46: true when the field is a runtime-defined custom field. Its value
+  // lives in the row's reserved `custom` sub-object, not at the row's top level.
+  custom: boolean
 }
 
 export type CubeMetadata = {
@@ -42,6 +45,36 @@ export type PageOf<T> = {
 }
 
 export type Row = Record<string, unknown>
+
+// The value of one field in one row, wherever the backend stores it. A custom
+// field's value travels in the row's `custom` sub-object (qwbe
+// core/src/custom-values.ts); a static field's value sits at the top level.
+// A row carrying an ORPHAN custom value (one whose definition was deleted)
+// never matches a published field, so this simply never asks for it.
+export function customValueOf(row: Row, field: FieldMetadata): unknown {
+  if (!field.custom) return row[field.name]
+  const custom = row.custom
+  return custom && typeof custom === "object" ? (custom as Row)[field.name] : undefined
+}
+
+// The control a cell edits with, derived from the field's metadata alone --
+// never from a list of field names. A `select` (metadata `enum`) edits as a
+// select, a custom boolean as a checkbox, everything else as a text input.
+export type RenderKind = "select" | "checkbox" | "text"
+
+export function renderKindOf(field: FieldMetadata): RenderKind {
+  if (field.enum && field.enum.length > 0) return "select"
+  if (field.custom && field.type === "boolean") return "checkbox"
+  return "text"
+}
+
+// Whether the signed-in user may define custom fields. qwbe's /auth/me
+// publishes the effective permission list; defining rides on the
+// customfields:write permission (the customfields pack's own manifest). A user
+// without it gets no panel at all -- and a direct API call answers 403.
+export function canDefineFields(permissions: ReadonlyArray<string>): boolean {
+  return permissions.includes("customfields:write")
+}
 
 // The query-string keys qwbe's list contract owns. A cube field with one of
 // these names must never be sent as a bare filter key, or it would override
@@ -277,6 +310,10 @@ export async function saveCell(opts: {
 }): Promise<SaveResult> {
   const { rowPath, field, current, next, doFetch } = opts
   if (next === String(current ?? "")) return { status: "unchanged" }
+  // One path for static AND custom fields: a custom field is saved through the
+  // TARGET cube's own PATCH, the kernel folds the undeclared key into the
+  // row's `custom` sub-object and validates it against the definition, and a
+  // refusal comes back as qwbe's own message.
   const response = await doFetch(rowPath, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
@@ -286,5 +323,10 @@ export async function saveCell(opts: {
     return { status: "refused", message: errorMessage(await errorBody(response), field.name) }
   }
   const saved = (await response.json()) as Row
-  return { status: "saved", field: field.name, value: saved[field.name] }
+  // A custom field's stored value comes back inside the row's `custom`
+  // sub-object; a static field's value stays at the top level.
+  const value = field.custom
+    ? ((saved.custom as Row | undefined)?.[field.name] ?? null)
+    : saved[field.name]
+  return { status: "saved", field: field.name, value }
 }

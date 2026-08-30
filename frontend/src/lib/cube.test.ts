@@ -44,6 +44,7 @@ const field = (over: Partial<FieldMetadata> = {}): FieldMetadata => ({
   nullable: false,
   enum: null,
   relation: null,
+  custom: false,
   ...over,
 })
 
