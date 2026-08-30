@@ -1,10 +1,10 @@
 // The source boundary of this pack, judged by the shared checker exported by qwbe
-// (`qwbe-core/package-contract`). The rules live in the kernel repo; this file only runs
+// (`qwbe-core/package`). The rules live in the kernel repo; this file only runs
 // them here and keeps the pack-specific assertions the checker cannot know.
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
-import { checkPackageSource } from "qwbe-core/package-contract"
+import { checkPackageSource } from "qwbe-core/package"
 
 describe("CRM source package boundary", () => {
   it("keeps the shared package contract", async () => {
