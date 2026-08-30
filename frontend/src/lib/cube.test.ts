@@ -10,8 +10,10 @@ import { createRequire } from "node:module"
 const require = createRequire(import.meta.url)
 
 import {
+  canDefineFields,
   canEdit,
   columnsFromFields,
+  customValueOf,
   coerce,
   cubeApiPath,
   errorMessage,
@@ -20,6 +22,7 @@ import {
   rowHref,
   listApiPath,
   listQueryString,
+  renderKindOf,
   metadataApiPath,
   resolveRelationTitle,
   routeOf,
@@ -402,5 +405,114 @@ describe("paging shape and response use", () => {
   it("the row title falls back to the id when no required field has a value", () => {
     const { titleOf: t } = require("./cube.ts") as typeof import("./cube.ts")
     assert.equal(t(meta(), { id: "acc-2", name: null }), "acc-2")
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Custom fields (QWB-52)
+// ---------------------------------------------------------------------------
+
+const customField = (over: Partial<FieldMetadata> = {}): FieldMetadata =>
+  field({ name: "lead_source", label: "Lead source", custom: true, ...over })
+
+describe("a custom field in the metadata becomes a column", () => {
+  it("appends the custom field to the derived columns like any other", () => {
+    const fields = [field({ name: "name", required: true }), customField()]
+    const columns = columnsFromFields(fields).filter((c) => c.visible)
+    assert.deepEqual(
+      columns.map((c) => c.field.name),
+      ["name", "lead_source"],
+    )
+  })
+
+  it("an ORPHAN value in a row (definition deleted) never becomes a column and reads as absent", () => {
+    // The metadata no longer publishes the field, so nothing names it; the
+    // row still carries the value in its `custom` sub-object and nothing
+    // derived from the metadata touches it.
+    const row: Row = { id: "c1", name: "Dana", custom: { lead_source: "email", gone_field: "x" } }
+    const columns = columnsFromFields(meta().fields).filter((c) => c.visible)
+    assert.ok(!columns.some((c) => c.field.name === "gone_field"))
+    assert.ok(!columns.some((c) => c.field.name === "lead_source"))
+    assert.equal(customValueOf(row, customField({ name: "gone_field" })), "x")
+  })
+
+  it("a custom field's value is read from the row's custom sub-object", () => {
+    const row: Row = { id: "c1", name: "Dana", custom: { lead_source: "email" } }
+    assert.equal(customValueOf(row, customField()), "email")
+    // A static field still reads the top level.
+    assert.equal(customValueOf(row, field({ name: "name" })), "Dana")
+  })
+})
+
+describe("the edit control follows the field metadata alone", () => {
+  it("a select (enum) edits as a select with exactly the published options", () => {
+    const f = customField({ enum: ["email", "phone"] })
+    assert.equal(renderKindOf(f), "select")
+  })
+
+  it("a custom bool edits as a checkbox", () => {
+    assert.equal(renderKindOf(customField({ name: "vip", type: "boolean" })), "checkbox")
+  })
+
+  it("a custom text field edits as text, and a static boolean keeps its existing editing", () => {
+    assert.equal(renderKindOf(customField()), "text")
+    assert.equal(renderKindOf(field({ name: "archived", type: "boolean" })), "text")
+  })
+})
+
+describe("a required custom field refuses an empty save with qwbe's own message", () => {
+  it("the refusal message in the cell is the backend's, not an invented one", async () => {
+    const backendMessage = '"lead_source" is required and cannot be emptied'
+    const realFetch = globalThis.fetch
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ message: backendMessage }), { status: 400 })) as unknown as typeof fetch
+    try {
+      const result = await saveCell({
+        rowPath: "/api/qwbe/contacts/row-1",
+        field: customField({ required: true }),
+        current: "email",
+        next: "",
+        doFetch: globalThis.fetch,
+      })
+      assert.equal(result.status, "refused")
+      assert.equal(result.status === "refused" && result.message, backendMessage)
+    } finally {
+      globalThis.fetch = realFetch
+    }
+  })
+
+  it("a successful save merges the value back from the custom sub-object", async () => {
+    const realFetch = globalThis.fetch
+    let sentBody: unknown
+    globalThis.fetch = (async (_url: RequestInfo | URL, init?: RequestInit) => {
+      sentBody = JSON.parse(String(init?.body))
+      return new Response(JSON.stringify({ id: "row-1", custom: { lead_source: "phone" } }), {
+        status: 200,
+      })
+    }) as unknown as typeof fetch
+    try {
+      const result = await saveCell({
+        rowPath: "/api/qwbe/contacts/row-1",
+        field: customField({ enum: ["email", "phone"] }),
+        current: "email",
+        next: "phone",
+        doFetch: globalThis.fetch,
+      })
+      assert.deepEqual(sentBody, { lead_source: "phone" })
+      assert.equal(result.status, "saved")
+      assert.equal(result.status === "saved" && result.value, "phone")
+    } finally {
+      globalThis.fetch = realFetch
+    }
+  })
+})
+
+describe("the definitions panel follows the permission", () => {
+  it("a user without customfields:write gets no panel", () => {
+    assert.equal(canDefineFields(["auth:session", "crm:read", "customfields:read"]), false)
+  })
+
+  it("a user with customfields:write gets the panel", () => {
+    assert.equal(canDefineFields(["customfields:write"]), true)
   })
 })
