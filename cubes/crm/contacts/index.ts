@@ -4,8 +4,12 @@
 // QWB-47 there IS an Organization entity (`crm/accounts`), and the relation to it has one
 // truth: `accountId` on the contact. It is nullable, opaque, and set by the caller — an
 // organization's contact list is derived by filtering this cube's list on `accountId`, not by
-// a related-list endpoint. This cube does not import the accounts cube and does not name it in
-// its manifest; the id is checked for shape here, and resolved by whoever displays it.
+// a related-list endpoint, and it is patchable: a contact can move to another organization or
+// be unlinked. This cube does not import the accounts cube; the manifest DECLARES the relation
+// target (`relations.accountId`) so the metadata endpoint can resolve ids to names — metadata,
+// not an import, and no coupling of code. The id is checked for shape here only: refusing a
+// well-formed id that does not exist needs a kernel-enforced relation, which does not exist
+// yet (see README.md).
 //
 // `contracts` is not named anywhere in this file either. It holds a party id on its side; this
 // cube does not know it exists. The cubes land in the same flat level-0 namespace, each with
@@ -23,40 +27,16 @@ import { defineCube } from "qwbe-core/cube"
 import { EntityMeta, type SummaryRow } from "qwbe-core/entity"
 import { Forbidden, NotFound } from "qwbe-core/errors"
 import { PageOf } from "qwbe-core/http"
-import { PageParams, pageRequest } from "qwbe-core/pagination"
+import { pageRequest } from "qwbe-core/pagination"
+import { Contact, ContactCreate, ContactListParams, ContactPatch } from "./schema.ts"
 
 const TABLE = "contacts"
 const ENTITY = "Contact"
-
-const Contact = Schema.Struct({
-  ...EntityMeta,
-  name: Schema.String,
-  email: Schema.String,
-  /** Optional in practice, so nullable in the schema rather than absent from responses. */
-  phone: Schema.NullOr(Schema.String),
-  /** Free text on purpose — the Organization lives in its own cube, not folded in here. */
-  company: Schema.NullOr(Schema.String),
-  /** The one truth of the contact-to-organization relation. Nullable, opaque, caller-set. */
-  accountId: Schema.NullOr(Schema.String),
-}).annotations({ identifier: "Contact" })
-
-const ContactCreate = Schema.Struct({
-  name: Schema.String,
-  email: Schema.optionalWith(Schema.String, { default: () => "" }),
-  phone: Schema.optionalWith(Schema.NullOr(Schema.String), { default: () => null }),
-  company: Schema.optionalWith(Schema.NullOr(Schema.String), { default: () => null }),
-  accountId: Schema.optionalWith(Schema.NullOr(Schema.NonEmptyTrimmedString), { default: () => null }),
-}).annotations({ identifier: "ContactCreate" })
 
 type ContactRow = typeof Contact.Type
 
 // The list takes one extra filter beyond paging and sorting: `accountId`. That filter IS the
 // derived contact list of an organization — no second endpoint, no related list.
-const ContactListParams = Schema.Struct({
-  ...PageParams.fields,
-  accountId: Schema.optional(Schema.NonEmptyTrimmedString),
-})
-
 const group = HttpApiGroup.make("contacts")
   .add(
     HttpApiEndpoint.get("list")
@@ -72,6 +52,13 @@ const group = HttpApiGroup.make("contacts")
       .addError(Forbidden),
   )
   .add(HttpApiEndpoint.post("create")`/contacts`.setPayload(ContactCreate).addSuccess(Contact).addError(Forbidden))
+  .add(
+    HttpApiEndpoint.patch("update")`/contacts/${HttpApiSchema.param("id", Schema.String)}`
+      .setPayload(ContactPatch)
+      .addSuccess(Contact)
+      .addError(NotFound)
+      .addError(Forbidden),
+  )
   .middleware(Authorization)
 
 // The public face of a contact. A phone number is deliberately NOT in it: a summary is shown to
@@ -92,6 +79,10 @@ export const cube = defineCube(group, {
     tables: [TABLE],
     entity: ENTITY,
     sortable: ["name", "company", "createdAt"],
+    // Declared, not resolved: the metadata endpoint publishes the target (and summaryById
+    // resolution through it). A declared target is metadata, not an import — no code couples
+    // the cubes.
+    relations: { accountId: { target: "crm/accounts" } },
     requiresAuth: true,
     permissions: [
       { name: "crm/contacts:read", roles: ["admin", "reader"] },
@@ -139,6 +130,17 @@ export const cube = defineCube(group, {
           yield* requirePermission("crm/contacts:write")
           const c = (yield* store.insert(TABLE, ENTITY, "cont", payload)) as ContactRow
           yield* bus.publish("crm/contacts.created", { id: c.id, title: c.name })
+          return { ...c, accountId: c.accountId ?? null }
+        }),
+
+      update: ({ path, payload }) =>
+        Effect.gen(function* () {
+          yield* requirePermission("crm/contacts:write")
+          const current = yield* store.byId<ContactRow>(TABLE, path.id)
+          if (!current) return yield* Effect.fail(new NotFound({ message: `contact ${path.id} does not exist` }))
+          // An empty PATCH changes nothing: no version bump, no outbox row.
+          if (Object.keys(payload).length === 0) return { ...current, accountId: current.accountId ?? null }
+          const c = (yield* store.update(TABLE, path.id, payload as Partial<ContactRow>)) as ContactRow
           return { ...c, accountId: c.accountId ?? null }
         }),
     },
