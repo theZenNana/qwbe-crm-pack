@@ -1,14 +1,15 @@
-// The CONTACTS cube — one half of the CRM plugin (two cubes, one package).
+// The CONTACTS cube — one half of the CRM plugin (two cubes and a sibling, one package).
 //
-// Domain: a CONTACT is a person the business deals with. `company` is free text, deliberately:
-// the historical CRM had no Account entity, and the rebuilt model keeps that limit on purpose —
-// inventing a first-class company would be ERP modelling, and it would force every existing row
-// through a migration nobody designed. The day a real account entity is wanted, that is a
-// design decision of its own, not a silent side effect of a restore.
+// Domain: a CONTACT is a person the business deals with. `company` stays free text. Since
+// QWB-47 there IS an Organization entity (`crm/accounts`), and the relation to it has one
+// truth: `accountId` on the contact. It is nullable, opaque, and set by the caller — an
+// organization's contact list is derived by filtering this cube's list on `accountId`, not by
+// a related-list endpoint. This cube does not import the accounts cube and does not name it in
+// its manifest; the id is checked for shape here, and resolved by whoever displays it.
 //
-// `contracts` is not named anywhere in this file. It holds a party id on its side; this cube
-// does not know it exists. The two land in the same flat level-0 namespace, each with its own
-// table, API, schema, permissions and events, and neither imports the other — they share a
+// `contracts` is not named anywhere in this file either. It holds a party id on its side; this
+// cube does not know it exists. The cubes land in the same flat level-0 namespace, each with
+// its own table, API, schema, permissions and events, and none imports another — they share a
 // directory on disk and nothing else.
 //
 // Adapted (QWB-30) from the pre-QWB-19 source preserved at qwbe-packs: the public cube
@@ -33,8 +34,10 @@ const Contact = Schema.Struct({
   email: Schema.String,
   /** Optional in practice, so nullable in the schema rather than absent from responses. */
   phone: Schema.NullOr(Schema.String),
-  /** Free text on purpose — there is NO account entity in this model. See the header. */
+  /** Free text on purpose — the Organization lives in its own cube, not folded in here. */
   company: Schema.NullOr(Schema.String),
+  /** The one truth of the contact-to-organization relation. Nullable, opaque, caller-set. */
+  accountId: Schema.NullOr(Schema.String),
 }).annotations({ identifier: "Contact" })
 
 const ContactCreate = Schema.Struct({
@@ -42,12 +45,26 @@ const ContactCreate = Schema.Struct({
   email: Schema.optionalWith(Schema.String, { default: () => "" }),
   phone: Schema.optionalWith(Schema.NullOr(Schema.String), { default: () => null }),
   company: Schema.optionalWith(Schema.NullOr(Schema.String), { default: () => null }),
+  accountId: Schema.optionalWith(Schema.NullOr(Schema.NonEmptyTrimmedString), { default: () => null }),
 }).annotations({ identifier: "ContactCreate" })
 
 type ContactRow = typeof Contact.Type
 
+// The list takes one extra filter beyond paging and sorting: `accountId`. That filter IS the
+// derived contact list of an organization — no second endpoint, no related list.
+const ContactListParams = Schema.Struct({
+  ...PageParams.fields,
+  accountId: Schema.optional(Schema.NonEmptyTrimmedString),
+})
+
 const group = HttpApiGroup.make("contacts")
-  .add(HttpApiEndpoint.get("list")`/contacts`.setUrlParams(PageParams).addSuccess(PageOf(Contact)).addError(Forbidden))
+  .add(
+    HttpApiEndpoint.get("list")
+      `/contacts`
+      .setUrlParams(ContactListParams)
+      .addSuccess(PageOf(Contact))
+      .addError(Forbidden),
+  )
   .add(
     HttpApiEndpoint.get("get")`/contacts/${HttpApiSchema.param("id", Schema.String)}`
       .addSuccess(Contact)
@@ -98,7 +115,15 @@ export const cube = defineCube(group, {
       list: ({ urlParams }) =>
         Effect.gen(function* () {
           yield* requirePermission("crm/contacts:read")
-          return yield* store.page<ContactRow>(TABLE, pageRequest(urlParams))
+          const { accountId, ...page } = urlParams
+          // Rows written before QWB-47 have no accountId key at all; the schema wants the key
+          // present and nullable, so every row is normalised on the way out. No backfill: the
+          // absence of the key and null mean the same thing.
+          const normalise = (c: ContactRow): ContactRow => ({ ...c, accountId: c.accountId ?? null })
+          const p = accountId
+            ? yield* store.page<ContactRow>(TABLE, pageRequest(page), { field: "accountId", value: accountId })
+            : yield* store.page<ContactRow>(TABLE, pageRequest(page))
+          return { ...p, rows: p.rows.map(normalise) }
         }),
 
       get: ({ path }) =>
@@ -106,7 +131,7 @@ export const cube = defineCube(group, {
           yield* requirePermission("crm/contacts:read")
           const c = yield* store.byId<ContactRow>(TABLE, path.id)
           if (!c) return yield* Effect.fail(new NotFound({ message: `contact ${path.id} does not exist` }))
-          return c
+          return { ...c, accountId: c.accountId ?? null }
         }),
 
       create: ({ payload }) =>
@@ -114,7 +139,7 @@ export const cube = defineCube(group, {
           yield* requirePermission("crm/contacts:write")
           const c = (yield* store.insert(TABLE, ENTITY, "cont", payload)) as ContactRow
           yield* bus.publish("crm/contacts.created", { id: c.id, title: c.name })
-          return c
+          return { ...c, accountId: c.accountId ?? null }
         }),
     },
 

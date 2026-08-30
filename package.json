@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test source-contract.test.mjs cubes/crm/contacts/index.test.ts cubes/crm/contracts/index.test.ts",
+    "test": "node --test source-contract.test.mjs cubes/crm/contacts/index.test.ts cubes/crm/contracts/index.test.ts cubes/crm/accounts/index.test.ts",
     "test:source": "node --test source-contract.test.mjs",
     "typecheck": "tsc --noEmit"
   },
