@@ -1,16 +1,33 @@
 #!/bin/sh
-# Pre-commit hook: gitleaks on the staged changes. Owner requirement (2026-08-25): every commit
-# in the Qwbe repos is scanned for secrets before it lands.
+# Pre-commit hook for this repository. Three gates, in the order that fails cheapest first:
+#
+#   1. no stray dotfiles from the agent sandbox,
+#   2. gitleaks on the staged changes,
+#   3. the project's own checks (typecheck, lint, tests) when something in the source changed.
 #
 # Git does not run hooks from a tracked directory by itself. After cloning, enable it once:
 #   git config core.hooksPath .githooks
 #
+# Honest limit: `git commit --no-verify` skips all of this. It is a nudge, not a boundary.
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+
+# --- 1. sandbox stubs ---------------------------------------------------------------------
+# The agent sandbox creates empty placeholder files for the dotfiles it denies access to, and a
+# `git add -A` sweeps them into the repository. That is how .claude/, .bashrc, .zshrc and the
+# rest reached the public repo on 2026-08-30 and had to be scrubbed out of the history.
+stray=$(printf '%s\n' "$staged" | grep -E '^\.(claude/|bash_profile|bashrc|profile|zprofile|zshrc|gitconfig|gitmodules|ripgreprc|idea|vscode|mcp\.json)' || true)
+if [ -n "$stray" ]; then
+  echo "x these are sandbox stubs / local tooling and must never be committed:" >&2
+  printf '    %s\n' $stray >&2
+  echo "  Unstage them (git restore --staged <path>); .gitignore already lists them." >&2
+  exit 1
+fi
+
+# --- 2. secrets ---------------------------------------------------------------------------
 # gitleaks is a standalone binary (https://github.com/gitleaks/gitleaks), not an npm package.
 # It has to be on the machine: PATH or ~/.local/bin. A missing binary fails the commit instead
 # of silently skipping the scan.
-#
-# Honest limit: `git commit --no-verify` skips this. It is a nudge, not a boundary.
-
 gitleaks_bin=$(command -v gitleaks || true)
 if [ -z "$gitleaks_bin" ] && [ -x "$HOME/.local/bin/gitleaks" ]; then
   gitleaks_bin="$HOME/.local/bin/gitleaks"
@@ -25,3 +42,22 @@ fi
   echo "x gitleaks found a secret in the staged changes. Remove it, then commit again." >&2
   exit 1
 }
+
+# --- 3. the project's own checks ----------------------------------------------------------
+# Only when source is staged: a commit that touches the README or the wiki should not pay for a
+# full typecheck. The frontend has its own scripts, so it is checked from its own directory.
+pack_src=$(printf '%s\n' "$staged" | grep -E '^(cubes/|probes/|source-contract\.test\.mjs|qwbe-package\.json|package\.json|tsconfig\.json)' || true)
+frontend_src=$(printf '%s\n' "$staged" | grep -E '^frontend/' | grep -vE '^frontend/(README\.md|\.env\.example)$' || true)
+
+if [ -n "$pack_src" ]; then
+  echo "- pack: typecheck and tests"
+  npm run --silent typecheck || { echo "x typecheck failed. Fix it, then commit again." >&2; exit 1; }
+  npm test --silent >/dev/null || { echo "x tests failed. Run 'npm test' to see which." >&2; exit 1; }
+fi
+
+if [ -n "$frontend_src" ]; then
+  echo "- frontend: lint, typecheck and tests"
+  (cd frontend && npm run --silent lint) || { echo "x frontend lint failed." >&2; exit 1; }
+  (cd frontend && npx --no-install tsc --noEmit) || { echo "x frontend typecheck failed." >&2; exit 1; }
+  (cd frontend && npm test --silent >/dev/null) || { echo "x frontend tests failed. Run them in frontend/." >&2; exit 1; }
+fi
