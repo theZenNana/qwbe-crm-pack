@@ -75,7 +75,14 @@ export function saveScreenshot(name, png) {
 
 /** Run one orca command; throw with the CLI's own output on failure. */
 export function orca(...args) {
-  const out = execFileSync(ORCA, [...args, "--json"], { encoding: "utf8", timeout: 60_000 })
+  let out
+  try {
+    out = execFileSync(ORCA, [...args, "--json"], { encoding: "utf8", timeout: 60_000 })
+  } catch (e) {
+    // A failed orca command still prints its JSON envelope on stdout — surface it.
+    out = typeof e.stdout === "string" && e.stdout.trim() ? e.stdout : ""
+    if (!out) throw new Error(`orca ${args.join(" ")} failed: ${e.message}`)
+  }
   let parsed
   try {
     parsed = JSON.parse(out)
@@ -96,7 +103,7 @@ export function snapshot() {
 
 /** First ref whose accessible name matches a predicate (string or regex). */
 export function refFor(refs, match) {
-  const pred = typeof match === "string" ? (n) => n.includes(match) : (n) => match.test(n)
+  const pred = typeof match === "string" ? (n) => n.includes(match) : typeof match === "function" ? match : (n) => match.test(n)
   for (const [ref, info] of Object.entries(refs)) {
     if (pred(info.name ?? "")) return ref
   }
