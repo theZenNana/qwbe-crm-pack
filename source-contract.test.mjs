@@ -30,7 +30,8 @@ describe("CRM source package boundary", () => {
       { fromCube: "contracts", toCube: "crm/contracts", fromPlugin: "crm-pack" },
     ])
     assert.deepEqual(accounts.manifest.dataMigration, [
-      { fromCube: "accounts", toCube: "crm/accounts", fromPlugin: "crm-pack" },
+      { fromCube: "organizations", toCube: "crm/accounts", fromPlugin: "crm-pack" },
     ])
+    assert.deepEqual(accounts.manifest.tables, ["organizations"])
   })
 })

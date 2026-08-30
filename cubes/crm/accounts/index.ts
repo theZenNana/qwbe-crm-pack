@@ -28,7 +28,12 @@ import { PageOf } from "qwbe-core/http"
 import { PageParams, pageRequest } from "qwbe-core/pagination"
 import { Account, AccountCreate, AccountPatch, type AccountRow } from "./schema.ts"
 
-const TABLE = "accounts"
+// The table is "organizations", not "accounts": the platform's builtin `account` cube already
+// owns a table called "accounts" (user accounts and credential hashes), and a table has exactly
+// one owner, so a kernel that mounts both refuses to boot with DuplicateTableError. The cube name
+// and its route stay "accounts" -- only the storage name moves, and "organizations" is what the
+// entity is called anyway.
+const TABLE = "organizations"
 const ENTITY = "Organization"
 
 const group = HttpApiGroup.make("accounts")
@@ -75,7 +80,10 @@ export const cube = defineCube(group, {
       { name: "crm/accounts:write", roles: ["admin"] },
     ],
     publishes: ["crm/accounts.created"],
-    dataMigration: [{ fromCube: "accounts", toCube: "crm/accounts", fromPlugin: "crm-pack" }],
+    // The contract requires a child cube to declare where its rows come from. The source is
+    // named "organizations", like the table: a flat cube called `accounts` would name the
+    // platform's own user-account cube as the source of our rows.
+    dataMigration: [{ fromCube: "organizations", toCube: "crm/accounts", fromPlugin: "crm-pack" }],
   },
 
   create: ({ store, bus }) => ({
