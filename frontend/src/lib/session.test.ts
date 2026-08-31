@@ -6,6 +6,7 @@ import {
   expireSessionCookie,
   loginToQwbe,
   proxyToQwbe,
+  hostOf,
   serializeSessionCookie,
   sessionCookie,
   sessionCookieName,
@@ -17,24 +18,28 @@ const okLogin = async () =>
   })
 
 describe("sessionCookieName", () => {
-  it("carries the port of the qwbe instance, so two stacks on localhost do not share a session", () => {
-    assert.equal(sessionCookieName("http://127.0.0.1:4500"), "qwbe_session_4500")
-    assert.notEqual(
-      sessionCookieName("http://127.0.0.1:4500"),
-      sessionCookieName("http://127.0.0.1:46491"),
-    )
+  it("carries the port of the frontend's own host, so two stacks on localhost do not share a session", () => {
+    assert.equal(sessionCookieName("localhost:4510"), "qwbe_session_4510")
+    assert.notEqual(sessionCookieName("localhost:4510"), sessionCookieName("localhost:35907"))
   })
 
-  it("falls back to the plain name when the API base names no port", () => {
-    assert.equal(sessionCookieName("https://qwbe.example.com"), "qwbe_session")
+  it("falls back to the plain name when the host names no port", () => {
+    assert.equal(sessionCookieName("crm.example.com"), "qwbe_session")
+    assert.equal(sessionCookieName(null), "qwbe_session")
     assert.equal(sessionCookieName(undefined), "qwbe_session")
+  })
+
+  it("takes the host from the request, x-forwarded-host first", () => {
+    const headers = new Headers({ host: "127.0.0.1:3000", "x-forwarded-host": "crm.example.com:8443" })
+    assert.equal(sessionCookieName(hostOf(headers)), "qwbe_session_8443")
+    assert.equal(hostOf(new Headers({ host: "localhost:4510" })), "localhost:4510")
   })
 })
 
 describe("sessionCookie", () => {
   it("is httpOnly, lax, path-scoped to the api prefix and expires with the token", () => {
-    const cookie = sessionCookie("tok-1", "2026-09-06T00:00:00Z", true)
-    assert.equal(cookie.name, sessionCookieName())
+    const cookie = sessionCookie("tok-1", "2026-09-06T00:00:00Z", true, "localhost:4510")
+    assert.equal(cookie.name, "qwbe_session_4510")
     assert.equal(cookie.httpOnly, true)
     assert.equal(cookie.sameSite, "lax")
     assert.equal(cookie.secure, true)
@@ -49,8 +54,8 @@ describe("sessionCookie", () => {
 
 describe("expireSessionCookie", () => {
   it("clears the cookie with the same name and path, already expired", () => {
-    const cookie = expireSessionCookie(true)
-    assert.equal(cookie.name, sessionCookieName())
+    const cookie = expireSessionCookie(true, "localhost:4510")
+    assert.equal(cookie.name, "qwbe_session_4510")
     assert.equal(cookie.value, "")
     assert.equal(cookie.path, COOKIE_PATH)
     assert.equal(cookie.expires.getTime(), 0)

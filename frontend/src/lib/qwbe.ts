@@ -8,9 +8,10 @@
 //
 // It lives beside session.ts, not inside it, only because `next/headers` cannot
 // be imported under `node --test` -- session.ts is the unit-tested half.
-import { cookies } from "next/headers"
+import { cookies, headers } from "next/headers"
 
 import {
+  hostOf,
   sessionCookieName,
   expireSessionCookie,
   proxyToQwbe,
@@ -36,7 +37,7 @@ export async function qwbeFetch(
       body: "server misconfigured: QWBE_API_URL is not set",
     }
   }
-  const token = (await cookies()).get(sessionCookieName())?.value
+  const token = (await cookies()).get(await currentCookieName())?.value
   return proxyToQwbe(
     apiBase,
     path,
@@ -47,9 +48,17 @@ export async function qwbeFetch(
   )
 }
 
+// The cookie name for the request being served: the same host the browser
+// used, so reading and clearing name the cookie /api/login wrote.
+async function currentCookieName(): Promise<string> {
+  return sessionCookieName(hostOf(await headers()))
+}
+
 // The single Set-Cookie value that clears the session, built from the same
 // serializer /api/login writes the cookie with: the two agree by construction
 // instead of by convention.
-export function clearedSessionCookie(): string {
-  return serializeSessionCookie(expireSessionCookie(process.env.NODE_ENV === "production"))
+export async function clearedSessionCookie(): Promise<string> {
+  return serializeSessionCookie(
+    expireSessionCookie(process.env.NODE_ENV === "production", hostOf(await headers())),
+  )
 }

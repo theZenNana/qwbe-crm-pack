@@ -43,7 +43,7 @@ async function handle(request: NextRequest, { params }: Params) {
     // no-store: an authenticated response body must not be cached.
     "cache-control": "no-store",
   }
-  if (result.clearCookie) headers["set-cookie"] = clearedSessionCookie()
+  if (result.clearCookie) headers["set-cookie"] = await clearedSessionCookie()
   return new NextResponse(result.body, { status: result.status, headers })
 }
 

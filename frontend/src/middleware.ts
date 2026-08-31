@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server"
 
-import { sessionCookieName } from "@/lib/session"
+import { hostOf, sessionCookieName } from "@/lib/session"
 
 // Without a session cookie there is nothing worth rendering: every list would
 // fetch, take a 401 and stand there empty. One guard for all pages, native to
 // the framework, instead of a check repeated in each of them (QWB-54).
 export function middleware(request: NextRequest) {
-  if (request.cookies.has(sessionCookieName())) return NextResponse.next()
+  if (request.cookies.has(sessionCookieName(hostOf(request.headers)))) return NextResponse.next()
   const login = new URL("/login", request.url)
   login.searchParams.set("next", request.nextUrl.pathname + request.nextUrl.search)
   return NextResponse.redirect(login)

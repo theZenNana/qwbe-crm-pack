@@ -2,11 +2,11 @@ import { NextRequest, NextResponse } from "next/server"
 
 import { clearedSessionCookie, qwbeFetch } from "@/lib/qwbe"
 
-function redirectToLogin(request: NextRequest) {
+async function redirectToLogin(request: NextRequest) {
   // 303 so the browser switches to GET: a 307 would keep the POST method and
   // the /login page would answer 405.
   const response = NextResponse.redirect(new URL("/login", request.url), 303)
-  response.headers.set("set-cookie", clearedSessionCookie())
+  response.headers.set("set-cookie", await clearedSessionCookie())
   return response
 }
 
