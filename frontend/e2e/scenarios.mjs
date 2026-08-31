@@ -593,7 +593,15 @@ export async function scenarioReader(qwbePort) {
   type("reader")
   const submit = refFor(snap.refs, (n) => n === "Sign in")
   click(submit, snap.refs[submit]?.name)
-  const landed = (await waitForUrl(".*/me.*")) && (await waitForText("Signed in as", 15_000))
+  const landed = (await waitForUrl(".*/me.*", 20_000)) && (await waitForText("Signed in as", 15_000))
+  if (!landed) {
+    const fields = orca(
+      "eval",
+      "--expression",
+      "JSON.stringify([...document.querySelectorAll('input')].map((i) => [i.name || i.id, i.value]))",
+    )
+    console.log(`  reader fields after submit: ${fields.result}`)
+  }
   if (!landed) {
     shot("08-reader-RED", { full: true })
     snap = snapshot()
@@ -841,40 +849,42 @@ export async function scenarioCustomFieldTypes(api, seed) {
 
   // The required text field: set a value first, then empty it. The refusal
   // must be qwbe's own message, shown in that cell, with the old value kept.
-  ok = (await openCellEditor(N_LABEL)) &&
-    (await (async () => {
-      for (let i = 0; i < 10; i++) {
-        const s = snapshot()
-        const box = Object.entries(s.refs).find(([, v]) => v.role === "textbox" && v.name === N_LABEL)?.[0]
-        if (box) {
-          keypress("ctrl+a")
-          type("hello")
-          keypress("Return")
-          return true
-        }
-        await new Promise((r) => setTimeout(r, 500))
-      }
-      return false
-    })())
+  const noteOpen1 = await openCellEditor(N_LABEL)
+  let noteTyped1 = false
+  for (let i = 0; i < 10 && !noteTyped1; i++) {
+    const s = snapshot()
+    const box = Object.entries(s.refs).find(([, v]) => v.role === "textbox" && v.name === N_LABEL)?.[0]
+    if (box) {
+      keypress("ctrl+a")
+      type("hello")
+      keypress("Return")
+      noteTyped1 = true
+    } else {
+      await new Promise((r) => setTimeout(r, 500))
+    }
+  }
   const helloShown = await waitForText("hello", 10_000)
-  ok = ok && (await openCellEditor(N_LABEL)) &&
-    (await (async () => {
-      for (let i = 0; i < 10; i++) {
-        const s = snapshot()
-        const box = Object.entries(s.refs).find(([, v]) => v.role === "textbox" && v.name === N_LABEL)?.[0]
-        if (box) {
-          keypress("ctrl+a")
-          type("")
-          keypress("Return")
-          return true
-        }
-        await new Promise((r) => setTimeout(r, 500))
-      }
-      return false
-    })())
+  const noteOpen2 = noteTyped1 ? await openCellEditor(N_LABEL) : false
+  let noteTyped2 = false
+  for (let i = 0; i < 10 && !noteTyped2; i++) {
+    const s = snapshot()
+    const box = Object.entries(s.refs).find(([, v]) => v.role === "textbox" && v.name === N_LABEL)?.[0]
+    if (box) {
+      keypress("ctrl+a")
+      type("")
+      keypress("Return")
+      noteTyped2 = true
+    } else {
+      await new Promise((r) => setTimeout(r, 500))
+    }
+  }
   const refused = await waitForText("cannot be emptied", 15_000)
   snap = snapshot()
   shot("09-required-refused")
+  const noteDetail = `note open=${noteOpen1}/${noteOpen2} typed=${noteTyped1}/${noteTyped2} hello=${helloShown} refused=${refused}`
+  if (!noteTyped1 || !helloShown || !noteTyped2 || !refused) {
+    return record(name, "RED", noteDetail, "09-required-refused.png")
+  }
 
   // The values the backend actually holds (the row's own API, admin session).
   const row = (await api.call(`/contacts/${seed.contactLinked.id}`)).body
@@ -898,7 +908,7 @@ export async function scenarioCustomFieldTypes(api, seed) {
     pass ? "PASS" : "RED",
     pass
       ? "number 7, bool yes, date 2026-01-02 in the cells and the backend; the emptied required field refused with qwbe's message"
-      : `ok=${ok} hello=${helloShown} refused=${refused} values=${JSON.stringify(custom).slice(0, 120)} cleaned=${cleaned} date=${dateShown}`,
+      : `${noteDetail} values=${JSON.stringify(custom).slice(0, 120)} cleaned=${cleaned} date=${dateShown}`,
     "09-required-refused.png",
   )
 }
