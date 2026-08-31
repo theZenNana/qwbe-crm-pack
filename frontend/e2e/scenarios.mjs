@@ -71,6 +71,16 @@ export function closeTabs() {
   tabs.length = 0
 }
 
+/** Wait until the Sign in button is ENABLED (the app gates the submit on hydration). */
+async function waitSignInEnabled(timeout = 15_000) {
+  const deadline = Date.now() + timeout
+  for (;;) {
+    if (!/button "Sign in" \[disabled/.test(snapshot().text)) return true
+    if (Date.now() >= deadline) return false
+    await new Promise((r) => setTimeout(r, 500))
+  }
+}
+
 async function settle(text, timeout = 30_000) {
   const ok = await waitForText(text, timeout)
   if (!ok) throw new Error(`page never showed ${JSON.stringify(text)}`)
@@ -119,6 +129,10 @@ export async function scenarioLogin() {
   const name = "login lands on the identity page"
   await open("/login")
   await settle("Sign in")
+  if (!(await waitSignInEnabled())) {
+    shot("01-login-page-RED", { full: true })
+    return record(name, "RED", "the Sign in submit never became enabled (no hydration)", "01-login-page-RED.png")
+  }
   shot("01-login-page")
   let snap = snapshot()
   const userRef = refFor(snap.refs, "Username")
@@ -580,6 +594,10 @@ export async function scenarioReader(qwbePort) {
   const name = "a reader sees no definitions panel and the definition API refuses the write"
   await open("/login")
   await settle("Sign in")
+  if (!(await waitSignInEnabled())) {
+    shot("08-reader-RED", { full: true })
+    return record(name, "RED", "the Sign in submit never became enabled (no hydration)", "08-reader-RED.png")
+  }
   let snap = snapshot()
   const userRef = refFor(snap.refs, "Username")
   const passRef = refFor(snap.refs, "Password")

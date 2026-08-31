@@ -1,7 +1,7 @@
 "use client"
 
 import { useRouter } from "next/navigation"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -27,6 +27,14 @@ export default function LoginPage() {
   const [password, setPassword] = useState("")
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
+  // The submit only exists once the client has hydrated: before that, typed
+  // values sit in the DOM while React's state is still empty, and a submit
+  // would send empty credentials (the race the e2e runs hit intermittently).
+  const [hydrated, setHydrated] = useState(false)
+  useEffect(() => {
+    const t = setTimeout(() => setHydrated(true), 0)
+    return () => clearTimeout(t)
+  }, [])
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -82,7 +90,7 @@ export default function LoginPage() {
                 {error ? <FieldError>{error}</FieldError> : null}
                 <FieldDescription>The credentials come from your qwbe account.</FieldDescription>
               </Field>
-              <Button type="submit" disabled={pending}>
+              <Button type="submit" disabled={pending || !hydrated}>
                 {pending ? "Signing in..." : "Sign in"}
               </Button>
             </FieldGroup>
