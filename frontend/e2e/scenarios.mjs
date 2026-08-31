@@ -603,10 +603,21 @@ export async function scenarioCustomField(api) {
   )?.[0]
   const cellShowsValue = snap.text.includes("email")
   // The cell text is not proof either (the panel sat right above it): read the
-  // contact rows back through the API and require the saved value under
-  // `custom` -- the save must reach qwbe, not only the page.
-  const contactRows = (await api.call("/contacts?limit=50")).body?.rows ?? []
-  const savedToBackend = contactRows.some((r) => r?.custom?.[CF_NAME] === "email")
+  // contact back through the API and require the saved value under `custom` --
+  // the save must reach qwbe, not only the page.
+  //
+  // Through the ROW'S OWN endpoint, like scenarioCustomFieldTypes and the
+  // runner's fold probe. NOT through the list: the kernel widens only an
+  // endpoint's top-level success schema with `custom`
+  // (qwbe core/src/runtime-composition.ts, widenTypeLiteral), so a list
+  // response carries `custom` on the `{rows, total}` envelope while Effect
+  // strips it from every row inside. A list-based check here reported
+  // backend=false against a save that had in fact landed.
+  const savedToBackend = (
+    await Promise.all(
+      ((await api.call("/contacts?limit=50")).body?.rows ?? []).map((r) => api.call(`/contacts/${r.id}`)),
+    )
+  ).some((r) => r.body?.custom?.[CF_NAME] === "email")
   if (!panelClosed || !cellBtn || !cellShowsValue || !savedToBackend) {
     shot("07-inline-RED", { full: true })
     return record(
