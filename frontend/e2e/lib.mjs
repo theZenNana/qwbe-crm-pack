@@ -165,10 +165,49 @@ export function refFor(refs, match) {
   return undefined
 }
 
+/**
+ * Bring the element carrying this accessible name into the viewport.
+ *
+ * Orca clicks at the element's viewport coordinates and does NOT scroll to it
+ * first, so an element outside the viewport takes the click on whatever sits
+ * at those coordinates -- `<html>` -- and nothing happens. The entity tables
+ * scroll horizontally, so every column past the fold (Billing City among them)
+ * was unreachable: measured 2026-08-31, the button sat at x=1127 in an 829px
+ * viewport and the click landed on HTML; after this scroll the same single
+ * click opens the editor and focus lands in it.
+ *
+ * Matching is by accessible name, the same string the click already carries,
+ * and takes the FIRST match -- the order the snapshot refs are in, so it is
+ * the element `clickStable` picked.
+ */
+const scrollNameIntoView = (name) => {
+  const expr =
+    `(() => { const want = ${JSON.stringify(name)};` +
+    ` const named = (el) => el.getAttribute("aria-label") || el.getAttribute("title") ||` +
+    ` (el.labels && el.labels[0] ? el.labels[0].textContent.trim() : "") || (el.textContent || "").trim();` +
+    ` const el = [...document.querySelectorAll("button, input, textarea, select, a, [role]")].find((e) => named(e) === want);` +
+    ` if (!el) return "not-found";` +
+    ` const r = el.getBoundingClientRect();` +
+    // Only move the page when the element is actually out of reach: scrolling
+    // one that is already visible shifts the coordinates Orca is about to
+    // click at, for no gain.
+    ` if (r.top >= 0 && r.left >= 0 && r.bottom <= innerHeight && r.right <= innerWidth) return "in-view";` +
+    ` el.scrollIntoView({ block: "center", inline: "center" });` +
+    ` return "scrolled" })()`
+  try {
+    orca("eval", "--expression", expr, ...pageArgs())
+  } catch {
+    // A scroll that cannot run must not fail the click: the click still
+    // reports its own outcome, and an off-screen target shows up as the
+    // scenario's own RED rather than as an error from a helper.
+  }
+}
+
 export const click = (ref, expectName) => {
   // The accessible name of the element just clicked: `type` asserts that the
   // focus actually landed there, instead of assuming it did.
   lastClicked = expectName ?? null
+  if (expectName) scrollNameIntoView(expectName)
   return orca("click", "--element", ref, ...pageArgs())
 }
 let lastClicked = null
@@ -223,7 +262,44 @@ export function type(text) {
   if (typeof r?.result === "string" && r.result.startsWith("typed:")) return r.result
   throw new Error(`type(${payload}) landed nowhere: ${JSON.stringify(r).slice(0, 200)}`)
 }
-export const keypress = (key) => orca("keypress", "--key", key, ...pageArgs())
+/**
+ * Press a key at the focused element, through the browser.
+ *
+ * `orca keypress` is an OS-level key event: like `orca type` it needs a
+ * focused desktop window, and on a locked screen it answers "Pressed Return"
+ * while nothing reaches the page (measured 2026-08-31: a capture keydown
+ * listener recorded an empty array after the CLI reported success, and the
+ * inline editor stayed open with its value uncommitted). Dispatching the key
+ * at `document.activeElement` has the semantics the suite needs: React
+ * listens for these events, and a dispatched Enter commits the inline editor
+ * exactly as a real one does -- proved on the live stack, where the same
+ * editor closed and the saved value appeared in the cell.
+ *
+ * Only the two keys the scenarios use are supported; anything else is a
+ * mistake to hear about, not to translate silently.
+ */
+export const keypress = (key) => {
+  if (key === "ctrl+a") {
+    return orca(
+      "eval",
+      "--expression",
+      `(() => { const el = document.activeElement;` +
+        ` if (el && typeof el.select === "function") { el.select(); return "selected" }` +
+        ` return "no-input" })()`,
+      ...pageArgs(),
+    )
+  }
+  if (key !== "Return") throw new Error(`keypress(${key}): only "Return" and "ctrl+a" are supported`)
+  return orca(
+    "eval",
+    "--expression",
+    `(() => { const el = document.activeElement; if (!el) return "no-focus";` +
+      ` const fire = (t) => el.dispatchEvent(new KeyboardEvent(t, {` +
+      ` key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true }));` +
+      ` fire("keydown"); fire("keyup"); return "pressed" })()`,
+    ...pageArgs(),
+  )
+}
 
 /** Wait for a condition (orca wait), swallowing only the timeout error. */
 export async function waitFor(flags, timeout = 15_000) {
