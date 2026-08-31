@@ -24,6 +24,27 @@ const eslintConfig = defineConfig([
         "error",
         { checksConditionals: true },
       ],
+      // no-misused-promises alone does NOT catch the bug this ticket is
+      // about: `await waitForText(x) && promise` has type
+      // `false | Promise<boolean>`, and that rule only reports a conditional
+      // whose type is ALWAYS thenable. strict-boolean-expressions does report
+      // it, because the type is not boolean. Every ordinary-truthiness
+      // allowance below is on, so the rule stays silent on strings, numbers,
+      // objects and nullables and only speaks up for a type that has no
+      // business in a condition -- a Promise. Verified: reinstating the old
+      // shape produces two errors here and nothing else in e2e/.
+      "@typescript-eslint/strict-boolean-expressions": [
+        "error",
+        {
+          allowAny: true,
+          allowString: true,
+          allowNumber: true,
+          allowNullableBoolean: true,
+          allowNullableString: true,
+          allowNullableNumber: true,
+          allowNullableObject: true,
+        },
+      ],
     },
   },
   // Override default ignores of eslint-config-next.
