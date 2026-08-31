@@ -4,7 +4,6 @@
 
 import { Schema } from "effect"
 import { EntityMeta } from "qwbe-core/entity"
-import { PageParams } from "qwbe-core/pagination"
 
 export const Contact = Schema.Struct({
   ...EntityMeta,
@@ -34,10 +33,3 @@ export const ContactCreate = Schema.Struct({
   company: Schema.optionalWith(Schema.NullOr(Schema.String), { default: () => null }),
   accountId: Schema.optionalWith(Schema.NullOr(Schema.NonEmptyTrimmedString), { default: () => null }),
 }).annotations({ identifier: "ContactCreate" })
-
-
-/** The list filter: `accountId` selects the contacts of one organization. */
-export const ContactListParams = Schema.Struct({
-  ...PageParams.fields,
-  accountId: Schema.optional(Schema.NonEmptyTrimmedString),
-})

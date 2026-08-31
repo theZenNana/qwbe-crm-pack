@@ -24,8 +24,9 @@ const admin = {
   username: "admin",
   roles: ["admin"],
   permissions: ["crm/accounts:read", "crm/accounts:write"],
+  sessionId: "s1",
 }
-const reader = { id: "u2", username: "reader", roles: ["reader"], permissions: ["crm/accounts:read"] }
+const reader = { id: "u2", username: "reader", roles: ["reader"], permissions: ["crm/accounts:read"], sessionId: "s2" }
 
 describe("accounts cube contract", () => {
   it("manifest declares exactly its own identity", () => {

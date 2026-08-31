@@ -23,8 +23,15 @@ const admin = {
   username: "admin",
   roles: ["admin"],
   permissions: ["crm/contacts:read", "crm/contacts:write"],
+  sessionId: "s1",
 }
-const reader = { id: "u2", username: "reader", roles: ["reader"], permissions: ["crm/contacts:read"] }
+const reader = {
+  id: "u2",
+  username: "reader",
+  roles: ["reader"],
+  permissions: ["crm/contacts:read"],
+  sessionId: "s2",
+}
 
 describe("contacts cube contract", () => {
   it("manifest declares exactly its own identity", () => {

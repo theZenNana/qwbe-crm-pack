@@ -27,21 +27,23 @@ import { defineCube } from "qwbe-core/cube"
 import { type SummaryRow } from "qwbe-core/entity"
 import { Forbidden, NotFound } from "qwbe-core/errors"
 import { PageOf } from "qwbe-core/http"
-import { pageRequest } from "qwbe-core/pagination"
-import { Contact, ContactCreate, ContactListParams, ContactPatch } from "./schema.ts"
+import { genericList, ListParams } from "qwbe-core/list"
+import { Contact, ContactCreate, ContactPatch } from "./schema.ts"
 
 const TABLE = "contacts"
 const ENTITY = "Contact"
 
 type ContactRow = typeof Contact.Type
 
-// The list takes one extra filter beyond paging and sorting: `accountId`. That filter IS the
-// derived contact list of an organization — no second endpoint, no related list.
+// The list is the kernel's generic one (QWB-54, ticket 07): paging, sorting, `q` and the
+// `<field>=` filters all come from the manifest. `accountId` is filterable by construction —
+// the declared relation makes it a list filter — and that filter IS the derived contact list
+// of an organization: no second endpoint, no related list, and no hand-written filter here.
 const group = HttpApiGroup.make("contacts")
   .add(
     HttpApiEndpoint.get("list")
       `/contacts`
-      .setUrlParams(ContactListParams)
+      .setUrlParams(ListParams)
       .addSuccess(PageOf(Contact))
       .addError(Forbidden),
   )
@@ -72,28 +74,34 @@ const summary = (c: ContactRow): SummaryRow => ({
   ],
 })
 
+// Named, because the kernel's generic list handler reads its `searchable` (and the declared
+// relations) to build the query it serves (QWB-54, ticket 07): the manifest is the whole
+// answer, so the handler must see it.
+const manifest = {
+  name: "contacts",
+  // Opts the cube into the metadata drift gate (qwbe src/metadata/schema-drift.ts):
+  // an undeclared version means a schema change cannot be caught (QWB-54).
+  version: "1.0.0",
+  parent: "crm",
+  tables: [TABLE],
+  entity: ENTITY,
+  sortable: ["name", "company", "createdAt"],
+  // Declared, not resolved: the metadata endpoint publishes the target (and summaryById
+  // resolution through it). A declared target is metadata, not an import — no code couples
+  // the cubes. The kernel's generic list reads the SAME declaration to serve
+  // `?accountId=` as a list filter: the relation is filterable by construction.
+  relations: { accountId: { target: "crm/accounts" } },
+  requiresAuth: true,
+  permissions: [
+    { name: "crm/contacts:read", roles: ["admin", "reader"] },
+    { name: "crm/contacts:write", roles: ["admin"] },
+  ],
+  publishes: ["crm/contacts.created"],
+  dataMigration: [{ fromCube: "contacts", toCube: "crm/contacts", fromPlugin: "crm-pack" }],
+}
+
 export const cube = defineCube(group, {
-  manifest: {
-    name: "contacts",
-    // Opts the cube into the metadata drift gate (qwbe src/metadata/schema-drift.ts):
-    // an undeclared version means a schema change cannot be caught (QWB-54).
-    version: "1.0.0",
-    parent: "crm",
-    tables: [TABLE],
-    entity: ENTITY,
-    sortable: ["name", "company", "createdAt"],
-    // Declared, not resolved: the metadata endpoint publishes the target (and summaryById
-    // resolution through it). A declared target is metadata, not an import — no code couples
-    // the cubes.
-    relations: { accountId: { target: "crm/accounts" } },
-    requiresAuth: true,
-    permissions: [
-      { name: "crm/contacts:read", roles: ["admin", "reader"] },
-      { name: "crm/contacts:write", roles: ["admin"] },
-    ],
-    publishes: ["crm/contacts.created"],
-    dataMigration: [{ fromCube: "contacts", toCube: "crm/contacts", fromPlugin: "crm-pack" }],
-  },
+  manifest,
 
   create: ({ store, bus }) => ({
     commands: [
@@ -106,26 +114,24 @@ export const cube = defineCube(group, {
     ],
 
     handlers: {
-      list: ({ urlParams }) =>
-        Effect.gen(function* () {
-          yield* requirePermission("crm/contacts:read")
-          const { accountId, ...page } = urlParams
-          // Rows written before QWB-47 have no accountId key at all; the schema wants the key
-          // present and nullable, so every row is normalised on the way out. No backfill: the
-          // absence of the key and null mean the same thing.
-          const normalise = (c: ContactRow): ContactRow => ({ ...c, accountId: c.accountId ?? null })
-          const p = accountId
-            ? yield* store.page<ContactRow>(TABLE, pageRequest(page), { field: "accountId", value: accountId })
-            : yield* store.page<ContactRow>(TABLE, pageRequest(page))
-          return { ...p, rows: p.rows.map(normalise) }
-        }),
+      // The kernel's list, not this cube's (QWB-54, ticket 07). Filtering by the accountId
+      // relation is served from the manifest's declared relation; the hand-written handler
+      // is gone. Rows stored before QWB-47 without the accountId KEY are fixed once by the
+      // one-shot backfill (tools/backfill-contact-accountid.mjs), not by normalizing every
+      // response here.
+      list: genericList<ContactRow>({
+        cube: "crm/contacts",
+        table: TABLE,
+        manifest,
+        store,
+      }),
 
       get: ({ path }) =>
         Effect.gen(function* () {
           yield* requirePermission("crm/contacts:read")
           const c = yield* store.byId<ContactRow>(TABLE, path.id)
           if (!c) return yield* Effect.fail(new NotFound({ message: `contact ${path.id} does not exist` }))
-          return { ...c, accountId: c.accountId ?? null }
+          return c
         }),
 
       create: ({ payload }) =>
@@ -133,7 +139,7 @@ export const cube = defineCube(group, {
           yield* requirePermission("crm/contacts:write")
           const c = (yield* store.insert(TABLE, ENTITY, "cont", payload)) as ContactRow
           yield* bus.publish("crm/contacts.created", { id: c.id, title: c.name })
-          return { ...c, accountId: c.accountId ?? null }
+          return c
         }),
 
       update: ({ path, payload }) =>
@@ -142,9 +148,8 @@ export const cube = defineCube(group, {
           const current = yield* store.byId<ContactRow>(TABLE, path.id)
           if (!current) return yield* Effect.fail(new NotFound({ message: `contact ${path.id} does not exist` }))
           // An empty PATCH changes nothing: no version bump, no outbox row.
-          if (Object.keys(payload).length === 0) return { ...current, accountId: current.accountId ?? null }
-          const c = (yield* store.update(TABLE, path.id, payload)) as ContactRow
-          return { ...c, accountId: c.accountId ?? null }
+          if (Object.keys(payload).length === 0) return current
+          return (yield* store.update(TABLE, path.id, payload)) as ContactRow
         }),
     },
 

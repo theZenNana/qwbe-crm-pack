@@ -24,8 +24,9 @@ const admin = {
   username: "admin",
   roles: ["admin"],
   permissions: ["crm/contracts:read", "crm/contracts:write"],
+  sessionId: "s1",
 }
-const noperm = { id: "u2", username: "nobody", roles: [], permissions: [] as string[] }
+const noperm = { id: "u2", username: "nobody", roles: [], permissions: [] as string[], sessionId: "s2" }
 
 describe("contracts cube contract", () => {
   it("rejects malformed party ids, currencies and signing timestamps", () => {

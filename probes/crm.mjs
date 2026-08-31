@@ -204,6 +204,26 @@ try {
     `http=${pageA.status} sortedBy=${pageA.body?.sortedBy}`,
   )
 
+  // Ticket 07: the list is the kernel's generic one, and the manifest's `searchable` fields
+  // are the filter contract. Two organizations, a filter on name, exactly one back.
+  const secondOrg = await api.call("/accounts", {
+    method: "POST",
+    headers: admin.headers,
+    body: JSON.stringify({ name: "Beta Constructions SRL", industry: "construction" }),
+  })
+  const filteredA = await api.call(`/accounts?name=${encodeURIComponent("Ada Industries SRL")}`, {
+    headers: reader.headers,
+  })
+  score.check(
+    "filtering organizations by name returns exactly the matching one",
+    secondOrg.status === 200 &&
+      filteredA.status === 200 &&
+      filteredA.body?.total === 1 &&
+      filteredA.body?.rows?.length === 1 &&
+      filteredA.body?.rows?.[0]?.name === "Ada Industries SRL",
+    `http=${filteredA.status} total=${filteredA.body?.total}`,
+  )
+
   // ---- the relation: accountId on the contact is the one truth -----------------------------
   const withAccount = await api.call("/contacts", {
     method: "POST",

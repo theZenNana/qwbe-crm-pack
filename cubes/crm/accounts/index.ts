@@ -25,7 +25,7 @@ import { defineCube } from "qwbe-core/cube"
 import { type SummaryRow } from "qwbe-core/entity"
 import { Forbidden, NotFound } from "qwbe-core/errors"
 import { PageOf } from "qwbe-core/http"
-import { PageParams, pageRequest } from "qwbe-core/pagination"
+import { genericList, ListParams } from "qwbe-core/list"
 import { Account, AccountCreate, AccountPatch, type AccountRow } from "./schema.ts"
 
 // The table is "organizations", not "accounts": the platform's builtin `account` cube already
@@ -37,7 +37,7 @@ const TABLE = "organizations"
 const ENTITY = "Organization"
 
 const group = HttpApiGroup.make("accounts")
-  .add(HttpApiEndpoint.get("list")`/accounts`.setUrlParams(PageParams).addSuccess(PageOf(Account)).addError(Forbidden))
+  .add(HttpApiEndpoint.get("list")`/accounts`.setUrlParams(ListParams).addSuccess(PageOf(Account)).addError(Forbidden))
   .add(
     HttpApiEndpoint.get("get")`/accounts/${HttpApiSchema.param("id", Schema.String)}`
       .addSuccess(Account)
@@ -65,29 +65,34 @@ const summary = (a: AccountRow): SummaryRow => ({
   ],
 })
 
+// Named, because the kernel's generic list handler reads its `searchable` (and the declared
+// relations) to build the query it serves (QWB-54, ticket 07): the manifest is the whole
+// answer, so the handler must see it.
+const manifest = {
+  name: "accounts",
+  // Opts the cube into the metadata drift gate (qwbe src/metadata/schema-drift.ts):
+  // an undeclared version means a schema change cannot be caught (QWB-54).
+  version: "1.0.0",
+  parent: "crm",
+  tables: [TABLE],
+  entity: ENTITY,
+  sortable: ["name", "industry", "createdAt"],
+  // What relational.search actually serves to the links route: exact match on these.
+  searchable: ["name", "industry"],
+  requiresAuth: true,
+  permissions: [
+    { name: "crm/accounts:read", roles: ["admin", "reader"] },
+    { name: "crm/accounts:write", roles: ["admin"] },
+  ],
+  publishes: ["crm/accounts.created"],
+  // The contract requires a child cube to declare where its rows come from. The source is
+  // named "organizations", like the table: a flat cube called `accounts` would name the
+  // platform's own user-account cube as the source of our rows.
+  dataMigration: [{ fromCube: "organizations", toCube: "crm/accounts", fromPlugin: "crm-pack" }],
+}
+
 export const cube = defineCube(group, {
-  manifest: {
-    name: "accounts",
-    // Opts the cube into the metadata drift gate (qwbe src/metadata/schema-drift.ts):
-    // an undeclared version means a schema change cannot be caught (QWB-54).
-    version: "1.0.0",
-    parent: "crm",
-    tables: [TABLE],
-    entity: ENTITY,
-    sortable: ["name", "industry", "createdAt"],
-    // What relational.search actually serves to the links route: exact match on these.
-    searchable: ["name", "industry"],
-    requiresAuth: true,
-    permissions: [
-      { name: "crm/accounts:read", roles: ["admin", "reader"] },
-      { name: "crm/accounts:write", roles: ["admin"] },
-    ],
-    publishes: ["crm/accounts.created"],
-    // The contract requires a child cube to declare where its rows come from. The source is
-    // named "organizations", like the table: a flat cube called `accounts` would name the
-    // platform's own user-account cube as the source of our rows.
-    dataMigration: [{ fromCube: "organizations", toCube: "crm/accounts", fromPlugin: "crm-pack" }],
-  },
+  manifest,
 
   create: ({ store, bus }) => ({
     commands: [
@@ -100,11 +105,15 @@ export const cube = defineCube(group, {
     ],
 
     handlers: {
-      list: ({ urlParams }) =>
-        Effect.gen(function* () {
-          yield* requirePermission("crm/accounts:read")
-          return yield* store.page<AccountRow>(TABLE, pageRequest(urlParams))
-        }),
+      // The kernel's list, not this cube's (QWB-54, ticket 07). Paging, sorting, `q`, the
+      // `searchable` fields and the declared relations all come from the manifest; the
+      // `<name>:read` permission is required inside the generic handler.
+      list: genericList<AccountRow>({
+        cube: "crm/accounts",
+        table: TABLE,
+        manifest,
+        store,
+      }),
 
       get: ({ path }) =>
         Effect.gen(function* () {
