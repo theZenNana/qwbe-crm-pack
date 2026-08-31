@@ -5,8 +5,24 @@
 
 // Path "/" so the browser also sends the cookie to pages (for example /me),
 // not only to the /api route handlers that read it.
-export const SESSION_COOKIE = "qwbe_session"
 export const COOKIE_PATH = "/"
+
+// One cookie name per qwbe instance.
+//
+// Browsers do NOT scope cookies by port, so every frontend on localhost shares
+// a single cookie jar: with one fixed name, a second stack's login overwrites
+// the first stack's session and its logout deletes it outright (measured
+// 2026-08-31 -- an e2e run on a throwaway port threw the owner out of his own
+// :4510 session within seconds). The qwbe instance this frontend is configured
+// against already identifies the stack, so its port names the cookie: same
+// QWBE_API_URL, same session; different port, different session.
+//
+// No port in the URL (a hostname behind 80/443) keeps the plain name: one
+// deployment per host, nothing to collide with.
+export const sessionCookieName = (apiBase = process.env.QWBE_API_URL): string => {
+  const port = apiBase?.match(/:(\d+)/)?.[1]
+  return port ? `qwbe_session_${port}` : "qwbe_session"
+}
 
 export type SessionCookieOptions = {
   name: string
@@ -30,7 +46,7 @@ export function sessionCookie(
     throw new Error(`invalid session expiry: ${expiresAt}`)
   }
   return {
-    name: SESSION_COOKIE,
+    name: sessionCookieName(),
     value: token,
     httpOnly: true,
     sameSite: "lax",
@@ -44,7 +60,7 @@ export function sessionCookie(
 // same name and path, empty value, already expired.
 export function expireSessionCookie(production = false): SessionCookieOptions {
   return {
-    name: SESSION_COOKIE,
+    name: sessionCookieName(),
     value: "",
     httpOnly: true,
     sameSite: "lax",

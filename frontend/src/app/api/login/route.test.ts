@@ -25,8 +25,10 @@ function stubQwbeLogin() {
 }
 
 describe("POST /api/login", () => {
-  it("answers with a token-free body and puts the token in Set-Cookie", async () => {
-    process.env.QWBE_API_URL = "http://qwbe.test"
+  it("answers with a token-free body and puts the token in a per-instance Set-Cookie", async () => {
+    // With a port on the API base the cookie name carries it: two stacks on
+    // localhost must not share one session cookie (QWB-54).
+    process.env.QWBE_API_URL = "http://127.0.0.1:4500"
     stubQwbeLogin()
     const res = await POST(loginRequest({ username: "u", password: "p" }))
     assert.equal(res.status, 200)
@@ -35,7 +37,7 @@ describe("POST /api/login", () => {
     assert.equal(body.token, undefined)
     assert.ok(!JSON.stringify(body).includes("tok-1"))
     const setCookie = res.headers.get("set-cookie") ?? ""
-    assert.ok(setCookie.includes("qwbe_session=tok-1"))
+    assert.ok(setCookie.includes("qwbe_session_4500=tok-1"))
     assert.ok(setCookie.includes("HttpOnly"))
   })
 

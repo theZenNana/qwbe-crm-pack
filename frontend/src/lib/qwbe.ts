@@ -11,7 +11,7 @@
 import { cookies } from "next/headers"
 
 import {
-  SESSION_COOKIE,
+  sessionCookieName,
   expireSessionCookie,
   proxyToQwbe,
   serializeSessionCookie,
@@ -36,7 +36,7 @@ export async function qwbeFetch(
       body: "server misconfigured: QWBE_API_URL is not set",
     }
   }
-  const token = (await cookies()).get(SESSION_COOKIE)?.value
+  const token = (await cookies()).get(sessionCookieName())?.value
   return proxyToQwbe(
     apiBase,
     path,

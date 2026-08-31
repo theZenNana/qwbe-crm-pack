@@ -3,12 +3,12 @@ import { describe, it } from "node:test"
 
 import {
   COOKIE_PATH,
-  SESSION_COOKIE,
   expireSessionCookie,
   loginToQwbe,
   proxyToQwbe,
   serializeSessionCookie,
   sessionCookie,
+  sessionCookieName,
 } from "./session.ts"
 
 const okLogin = async () =>
@@ -16,10 +16,25 @@ const okLogin = async () =>
     status: 200,
   })
 
+describe("sessionCookieName", () => {
+  it("carries the port of the qwbe instance, so two stacks on localhost do not share a session", () => {
+    assert.equal(sessionCookieName("http://127.0.0.1:4500"), "qwbe_session_4500")
+    assert.notEqual(
+      sessionCookieName("http://127.0.0.1:4500"),
+      sessionCookieName("http://127.0.0.1:46491"),
+    )
+  })
+
+  it("falls back to the plain name when the API base names no port", () => {
+    assert.equal(sessionCookieName("https://qwbe.example.com"), "qwbe_session")
+    assert.equal(sessionCookieName(undefined), "qwbe_session")
+  })
+})
+
 describe("sessionCookie", () => {
   it("is httpOnly, lax, path-scoped to the api prefix and expires with the token", () => {
     const cookie = sessionCookie("tok-1", "2026-09-06T00:00:00Z", true)
-    assert.equal(cookie.name, SESSION_COOKIE)
+    assert.equal(cookie.name, sessionCookieName())
     assert.equal(cookie.httpOnly, true)
     assert.equal(cookie.sameSite, "lax")
     assert.equal(cookie.secure, true)
@@ -35,7 +50,7 @@ describe("sessionCookie", () => {
 describe("expireSessionCookie", () => {
   it("clears the cookie with the same name and path, already expired", () => {
     const cookie = expireSessionCookie(true)
-    assert.equal(cookie.name, SESSION_COOKIE)
+    assert.equal(cookie.name, sessionCookieName())
     assert.equal(cookie.value, "")
     assert.equal(cookie.path, COOKIE_PATH)
     assert.equal(cookie.expires.getTime(), 0)
