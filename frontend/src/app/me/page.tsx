@@ -48,7 +48,7 @@ export default async function MePage() {
               would say the same thing twice, and leave two controls with the
               same accessible name for anyone reading the page by name. */}
           <p className="text-sm text-muted-foreground">
-            Your qwbe account, as this app sees it.
+            Your qwbe user, as this app sees it.
           </p>
         </CardContent>
       </Card>

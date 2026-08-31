@@ -75,8 +75,8 @@ describe("vtiger row mapping", () => {
     const { payload, error } = mapRow(accountsFixture[0], accountsMapping)
     assert.equal(error, undefined)
     assert.equal(payload.name, "Alpha Trading SRL")
-    assert.equal(payload.accountNo, "FIX-ACC-1")
-    assert.equal(payload.accountType, "Customer")
+    assert.equal(payload.organizationNo, "FIX-ACC-1")
+    assert.equal(payload.organizationType, "Customer")
     assert.equal(payload.employees, 12)
     assert.equal(payload.emailOptOut, false)
     assert.equal(payload.billingCity, "OrasulExemplu")
@@ -97,7 +97,7 @@ describe("vtiger row mapping", () => {
     const { payload } = mapRow(contactsFixture[0], contactsMapping)
     assert.equal(payload.name, "Andrei Exemplu")
     assert.equal(payload.email, "andrei@alpha-trading.example")
-    assert.equal(payload.accountId, undefined) // resolved by the tool from the ledger, not here
+    assert.equal(payload.organizationId, undefined) // resolved by the tool from the ledger, not here
   })
 
   it("keeps the row key stable", () => {
@@ -128,7 +128,10 @@ describe("import chain end-to-end (synthetic fixture, throwaway kernel)", { skip
     const coreSrc = join(qwbeRepo, "core")
     const core = join(mkdtempSync(join(tmpdir(), "qwb50-core-")), "core")
     cpSync(coreSrc, core, { recursive: true })
-    // this repository IS the plugin: cubes and the package manifest are all the kernel needs
+    // this repository IS the plugin: cubes and the package manifest are all the kernel needs.
+    // A rename DELETES a cube directory, and an overlay copy cannot delete, so any stale
+    // copy of the pack left by an earlier install is dropped before this checkout lands.
+    rmSync(join(core, "plugins", "crm-pack"), { recursive: true, force: true })
     cpSync(join(repoRoot, "cubes"), join(core, "plugins", "crm-pack", "cubes"), { recursive: true })
     cpSync(join(repoRoot, "qwbe-package.json"), join(core, "plugins", "crm-pack", "qwbe-package.json"))
 
@@ -196,7 +199,7 @@ describe("import chain end-to-end (synthetic fixture, throwaway kernel)", { skip
       headers: { authorization: `Bearer ${login.token}` },
     })).json()
     const names = (cubes ?? []).map((c) => c.name)
-    if (!names.includes("crm/accounts") || !names.includes("crm/contacts")) throw new Error(`crm cubes not mounted: ${names.join(", ")}`)
+    if (!names.includes("crm/organizations") || !names.includes("crm/contacts")) throw new Error(`crm cubes not mounted: ${names.join(", ")}`)
   })
   after(() => {
     if (stopServer) stopServer()
@@ -217,11 +220,11 @@ describe("import chain end-to-end (synthetic fixture, throwaway kernel)", { skip
       body: JSON.stringify({ username: "admin", password: "admin" }),
     })).json()
     const H = { authorization: `Bearer ${login.token}` }
-    if (path === "accounts") {
+    if (path === "organizations") {
       const r = await (await fetch(`${base}/cli/exec`, {
         method: "POST",
         headers: { ...H, "content-type": "application/json" },
-        body: JSON.stringify({ line: "crm/accounts:count" }),
+        body: JSON.stringify({ line: "crm/organizations:count" }),
       })).json()
       return Number(r.output)
     }
@@ -263,16 +266,16 @@ describe("import chain end-to-end (synthetic fixture, throwaway kernel)", { skip
     assert.match(mapC, /missing org:\s*1/)
     assert.match(mapC, /no org:\s*1/)
 
-    // the linked contact carries the qwbe accountId of its organization
+    // the linked contact carries the qwbe organizationId of its organization
     const H = { authorization: `Bearer ${login.token}` }
     const page = await (await fetch(`${base}/contacts?limit=10`, { headers: H })).json()
     const linked = page.rows.find((r) => r.name === "Andrei Exemplu")
     const unlinked = page.rows.find((r) => r.name === "Bianca Model")
-    assert.ok(linked && linked.accountId)
-    assert.ok(unlinked && unlinked.accountId === null)
+    assert.ok(linked && linked.organizationId)
+    assert.ok(unlinked && unlinked.organizationId === null)
 
     // counts in qwbe
-    assert.equal(await qwbeCount("accounts"), 3)
+    assert.equal(await qwbeCount("organizations"), 3)
     assert.equal(await qwbeCount("contacts"), 3)
 
     // IDEMPOTENCE: a second mapping run updates, does not duplicate
@@ -283,7 +286,7 @@ describe("import chain end-to-end (synthetic fixture, throwaway kernel)", { skip
     assert.match(mapC2, /updated:\s+3/)
     assert.match(mapC2, /created:\s+0/)
     assert.match(mapC2, /missing org:\s*1/)
-    assert.equal(await qwbeCount("accounts"), 3)
+    assert.equal(await qwbeCount("organizations"), 3)
     assert.equal(await qwbeCount("contacts"), 3)
 
     // the verify command prints counts and zero differences
@@ -319,7 +322,7 @@ describe("import chain end-to-end (synthetic fixture, throwaway kernel)", { skip
     }))
     const file = join(work, "accounts-kill.jsonl")
     writeFileSync(file, rows.map((r) => JSON.stringify(r)).join("\n") + "\n")
-    const before = await qwbeCount("accounts")
+    const before = await qwbeCount("organizations")
 
     const child = spawn(process.execPath, [join(here, "vtiger-map.mjs"), file, join(here, "../mappings/accounts.json")], {
       env: { ...process.env, QWB50_TEST_UNSAFE_INPUT: "1", QWBE_USER: "admin", QWBE_PASSWORD: "admin", QWBE_URL: base, QWB50_LEDGER_FLUSH: "1" },
@@ -327,7 +330,7 @@ describe("import chain end-to-end (synthetic fixture, throwaway kernel)", { skip
     })
     // kill as soon as at least two rows have landed
     for (let i = 0; i < 150 && child.exitCode === null; i++) {
-      const n = await qwbeCount("accounts")
+      const n = await qwbeCount("organizations")
       if (n >= before + 2) break
       await new Promise((r) => setTimeout(r, 100))
     }
@@ -339,7 +342,7 @@ describe("import chain end-to-end (synthetic fixture, throwaway kernel)", { skip
     // response and the ledger save cannot be distinguished from a never-imported row
     // (the cubes have no read-by-external-key endpoint). The flush keeps that window tiny.
     const again = run("vtiger-map.mjs", [file, join(here, "../mappings/accounts.json")], { QWBE_URL: base })
-    const finalCount = await qwbeCount("accounts")
+    const finalCount = await qwbeCount("organizations")
     assert.ok(finalCount >= before + 8 && finalCount <= before + 9, `expected 8-9 rows, got ${finalCount - before}`)
     const ledger = JSON.parse(readFileSync(join(work, "accounts-idmap.json"), "utf8"))
     const killKeys = Object.keys(ledger).filter((k) => k >= "950001" && k <= "950008")

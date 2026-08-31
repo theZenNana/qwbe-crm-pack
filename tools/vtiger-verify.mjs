@@ -2,7 +2,7 @@
 // Verification for the QWB-50 import: COUNTS only, never a row value.
 //
 // Per entity it prints: rows exported (line count of the JSONL), rows in the staging set
-// (optional), rows living in qwbe (the accounts count command; the contacts page total),
+// (optional), rows living in qwbe (the organizations count command; the contacts page total),
 // and the differences. For the organization-to-contact relation it counts, from the export
 // files and the accounts ledger, how many contacts point at an organization that never made
 // it into qwbe.
@@ -76,7 +76,7 @@ const accountsInQwbe = async () => {
   const r = await call("/cli/exec", {
     method: "POST",
     headers: H(),
-    body: JSON.stringify({ line: "crm/accounts:count" }),
+    body: JSON.stringify({ line: "crm/organizations:count" }),
   })
   return r.ok ? Number(r.body.output) : undefined
 }

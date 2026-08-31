@@ -1,4 +1,4 @@
-// Compile-time contract tests for the accounts cube (QWB-47).
+// Compile-time contract tests for the organizations cube (QWB-47, renamed QWB-54 ticket 12).
 //
 // What is proven here, without a server: the cube is a valid `defineCube` product (manifest
 // sane, handlers exactly matching endpoints — checked by the kernel's own validators), the
@@ -6,14 +6,14 @@
 // and 404 on the typed seam. Runtime HTTP proof lives in probes/crm.mjs.
 //
 // Run from the Qwbe layout (plugin installed at core/plugins/crm-pack/cubes/crm):
-//   cd <qwbe>/core && node --test plugins/crm-pack/cubes/crm/accounts/index.test.ts
+//   cd <qwbe>/core && node --test plugins/crm-pack/cubes/crm/organizations/index.test.ts
 
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import { Cause, Effect, Exit, Schema } from "effect"
 import { type CubeTools, validateCubeParts } from "qwbe-core/cube"
 import { CurrentUser, requirePermission } from "qwbe-core/auth"
-import { AccountPatch } from "./schema.ts"
+import { OrganizationPatch } from "./schema.ts"
 import type { Forbidden, NotFound } from "qwbe-core/errors"
 import { cube } from "./index.ts"
 
@@ -23,14 +23,20 @@ const admin = {
   id: "u1",
   username: "admin",
   roles: ["admin"],
-  permissions: ["crm/accounts:read", "crm/accounts:write"],
+  permissions: ["crm/organizations:read", "crm/organizations:write"],
   sessionId: "s1",
 }
-const reader = { id: "u2", username: "reader", roles: ["reader"], permissions: ["crm/accounts:read"], sessionId: "s2" }
+const reader = {
+  id: "u2",
+  username: "reader",
+  roles: ["reader"],
+  permissions: ["crm/organizations:read"],
+  sessionId: "s2",
+}
 
-describe("accounts cube contract", () => {
+describe("organizations cube contract", () => {
   it("manifest declares exactly its own identity", () => {
-    assert.equal(cube.manifest.name, "accounts")
+    assert.equal(cube.manifest.name, "organizations")
     assert.equal(cube.manifest.parent, "crm")
     assert.deepEqual(cube.manifest.tables, ["organizations"])
     assert.equal(cube.manifest.entity, "Organization")
@@ -38,38 +44,40 @@ describe("accounts cube contract", () => {
   })
 
   it("handlers match endpoints one-to-one (kernel validator)", () => {
-    assert.doesNotThrow(() => validateCubeParts("accounts", parts))
+    assert.doesNotThrow(() => validateCubeParts("organizations", parts))
   })
 
   it("permissions are namespaced to this cube", () => {
     for (const p of cube.manifest.permissions ?? []) {
-      assert.ok(p.name.startsWith("crm/accounts:"), p.name)
+      assert.ok(p.name.startsWith("crm/organizations:"), p.name)
     }
     assert.deepEqual(
       (cube.manifest.permissions ?? []).map((p) => p.name),
-      ["crm/accounts:read", "crm/accounts:write"],
+      ["crm/organizations:read", "crm/organizations:write"],
     )
   })
 
   it("publishes only its own event", () => {
-    assert.deepEqual(cube.manifest.publishes, ["crm/accounts.created"])
+    assert.deepEqual(cube.manifest.publishes, ["crm/organizations.created"])
   })
 
-  it("migrates from `organizations`, never from the platform's account cube", () => {
-    assert.deepEqual(cube.manifest.dataMigration, [
-      { fromCube: "organizations", toCube: "crm/accounts", fromPlugin: "crm-pack" },
-    ])
+  it("declares no predecessor, honestly (QWB-54, ticket 12)", () => {
+    // The manifest once claimed a migration from a cube that never existed, invented to pass
+    // a hierarchy gate. The fiction is gone: this cube has no predecessor and says so by
+    // declaring nothing. The kernel-side refusal of invented sources is ticket 08.
+    assert.equal(cube.manifest.dataMigration, undefined)
   })
 
-  it("does not claim the table the platform's account cube owns", () => {
-    // A table has exactly one owner: the builtin `account` cube stores user accounts and
-    // credential hashes in "accounts", so a kernel mounting both would refuse to boot.
-    assert.ok(!(cube.manifest.tables ?? []).includes("accounts"))
+  it("owns exactly its own table", () => {
+    // One table, one owner: the table is the cube's own name, so it can never collide with
+    // the table the platform's builtin credential cube owns (DuplicateTableError at boot
+    // otherwise).
+    assert.deepEqual(cube.manifest.tables, ["organizations"])
   })
 
   it("does not import the contacts cube or hold the relation on this side", () => {
-    // The relation's truth is Contact.accountId. This cube holds no contact list and names no
-    // sibling: no related-list endpoint, no copied field, no cross-cube anything.
+    // The relation's truth is Contact.organizationId. This cube holds no contact list and
+    // names no sibling: no related-list endpoint, no copied field, no cross-cube anything.
     const source = JSON.stringify(cube.manifest)
     for (const word of ["crm/contacts", "contactIds", "contactId"]) assert.ok(!source.includes(word), word)
   })
@@ -83,7 +91,7 @@ describe("accounts cube contract", () => {
     } as unknown as CubeTools
     const get = cube.create(tools).handlers.get
     const result = await Effect.runPromiseExit(
-      get({ path: { id: "acc_none" } } as Parameters<typeof get>[0]).pipe(
+      get({ path: { id: "org_none" } } as Parameters<typeof get>[0]).pipe(
         Effect.provideService(CurrentUser, admin),
       ) as Effect.Effect<unknown, Forbidden | NotFound>,
     )
@@ -102,7 +110,7 @@ describe("accounts cube contract", () => {
     } as unknown as CubeTools
     const update = cube.create(tools).handlers.update
     const result = await Effect.runPromiseExit(
-      update({ path: { id: "acc_none" }, payload: { name: "x" } } as Parameters<typeof update>[0]).pipe(
+      update({ path: { id: "org_none" }, payload: { name: "x" } } as Parameters<typeof update>[0]).pipe(
         Effect.provideService(CurrentUser, admin),
       ) as Effect.Effect<unknown, Forbidden | NotFound>,
     )
@@ -115,7 +123,7 @@ describe("accounts cube contract", () => {
     // The acceptance point behind /links/{entity}/{id}: the organization summary carries one
     // human title and the two detail lines, or nothing for a missing id.
     const row = {
-      id: "acc_1",
+      id: "org_1",
       type: "Organization",
       name: "Ada Industries SRL",
       industry: "manufacturing",
@@ -123,19 +131,19 @@ describe("accounts cube contract", () => {
     }
     const tools = {
       store: {
-        byId: (_t: string, id: string) => Effect.succeed(id === "acc_1" ? row : undefined),
+        byId: (_t: string, id: string) => Effect.succeed(id === "org_1" ? row : undefined),
       },
       bus: { publish: () => Effect.void },
     } as unknown as CubeTools
     const parts = cube.create(tools)
     const summaryById = parts.relational!.summaryById!
-    const hit = await Effect.runPromise(summaryById("acc_1"))
+    const hit = await Effect.runPromise(summaryById("org_1"))
     assert.equal(hit?.title, "Ada Industries SRL")
     assert.deepEqual(
       hit?.details.map((d) => d.key),
       ["industry", "city"],
     )
-    const miss = await Effect.runPromise(summaryById("acc_none"))
+    const miss = await Effect.runPromise(summaryById("org_none"))
     assert.equal(miss, undefined)
   })
 
@@ -143,7 +151,7 @@ describe("accounts cube contract", () => {
     // `deleted` is refused: there is no delete endpoint in this ticket, and a patched-away
     // organization would orphan its contacts (the rule for deletion lives in README.md).
     // `name` is the required title, so blank is refused; a negative headcount is refused.
-    const decode = Schema.decodeUnknownEither(AccountPatch)
+    const decode = Schema.decodeUnknownEither(OrganizationPatch)
     assert.ok(decode({ deleted: true })._tag === "Left")
     assert.ok(decode({ name: "   " })._tag === "Left")
     assert.ok(decode({ employees: -3 })._tag === "Left")
@@ -151,11 +159,11 @@ describe("accounts cube contract", () => {
     assert.ok(decode({})._tag === "Right")
   })
 
-  it("requirePermission refuses a caller without accounts:write", async () => {
+  it("requirePermission refuses a caller without organizations:write", async () => {
     // The kernel seam every write handler passes through — checked directly, with the same
     // context the auth cube provides in production.
     const exit = await Effect.runPromiseExit(
-      requirePermission("crm/accounts:write").pipe(Effect.provideService(CurrentUser, reader)),
+      requirePermission("crm/organizations:write").pipe(Effect.provideService(CurrentUser, reader)),
     )
     assert.ok(Exit.isFailure(exit))
     const failure = Cause.failureOption(exit.cause)

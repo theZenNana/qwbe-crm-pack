@@ -1,8 +1,8 @@
-// Test for the one-shot accountId backfill (QWB-54, ticket 07).
+// Test for the one-shot organizationId backfill (QWB-54, ticket 07; renamed ticket 12).
 //
 // What is proven, against a throwaway database (same recipe as import.test.mjs: the
 // password comes from QWBE_PG_PASSWORD, never a default):
-//   1. only rows WITHOUT the accountId key gain `accountId = null`;
+//   1. only rows WITHOUT the organizationId key gain `organizationId = null`;
 //   2. rows that carry the key -- null or a value -- are untouched;
 //   3. a second run changes nothing (idempotent), including the reported count.
 //
@@ -11,7 +11,7 @@
 import assert from "node:assert/strict"
 import { after, before, describe, it } from "node:test"
 import pg from "pg"
-import { backfillAccountId } from "./backfill-contact-accountid.mjs"
+import { backfillOrganizationId } from "./backfill-contact-organizationid.mjs"
 
 const url = () => {
   if (!process.env.QWBE_PG_PASSWORD) throw new Error("set QWBE_PG_PASSWORD in the environment (no password default)")
@@ -51,8 +51,8 @@ before(async () => {
   await pool.query(
     `INSERT INTO "${SCHEMA}"."${TABLE}" (id, type, body) VALUES
        ('old', 'Contact', '{"id":"old","type":"Contact","name":"Old Row"}'),
-       ('null', 'Contact', '{"id":"null","type":"Contact","name":"Null Row","accountId":null}'),
-       ('linked', 'Contact', '{"id":"linked","type":"Contact","name":"Linked Row","accountId":"acc_1"}')`,
+       ('null', 'Contact', '{"id":"null","type":"Contact","name":"Null Row","organizationId":null}'),
+       ('linked', 'Contact', '{"id":"linked","type":"Contact","name":"Linked Row","organizationId":"org_1"}')`,
   )
 })
 
@@ -67,19 +67,19 @@ const bodyOf = async (id) => {
   return r.rows[0].body
 }
 
-describe("the one-shot accountId backfill", () => {
+describe("the one-shot organizationId backfill", () => {
   it("fills the key with null only where it is missing", async () => {
-    const n = await backfillAccountId(pool, SCHEMA, TABLE)
+    const n = await backfillOrganizationId(pool, SCHEMA, TABLE)
     assert.equal(n, 1)
-    assert.deepEqual(await bodyOf("old"), { id: "old", type: "Contact", name: "Old Row", accountId: null })
-    assert.deepEqual(await bodyOf("null"), { id: "null", type: "Contact", name: "Null Row", accountId: null })
-    assert.deepEqual(await bodyOf("linked"), { id: "linked", type: "Contact", name: "Linked Row", accountId: "acc_1" })
+    assert.deepEqual(await bodyOf("old"), { id: "old", type: "Contact", name: "Old Row", organizationId: null })
+    assert.deepEqual(await bodyOf("null"), { id: "null", type: "Contact", name: "Null Row", organizationId: null })
+    assert.deepEqual(await bodyOf("linked"), { id: "linked", type: "Contact", name: "Linked Row", organizationId: "org_1" })
   })
 
   it("is idempotent: a second run reports zero and changes nothing", async () => {
-    const n = await backfillAccountId(pool, SCHEMA, TABLE)
+    const n = await backfillOrganizationId(pool, SCHEMA, TABLE)
     assert.equal(n, 0)
-    assert.equal((await bodyOf("old")).accountId, null)
-    assert.equal((await bodyOf("linked")).accountId, "acc_1")
+    assert.equal((await bodyOf("old")).organizationId, null)
+    assert.equal((await bodyOf("linked")).organizationId, "org_1")
   })
 })

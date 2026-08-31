@@ -92,7 +92,7 @@ export default function LoginPage() {
                   required
                 />
                 {error ? <FieldError>{error}</FieldError> : null}
-                <FieldDescription>The credentials come from your qwbe account.</FieldDescription>
+                <FieldDescription>The credentials come from your qwbe user.</FieldDescription>
               </Field>
               <Button type="submit" disabled={pending || !hydrated}>
                 {pending ? "Signing in..." : "Sign in"}

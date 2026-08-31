@@ -14,16 +14,16 @@ export const Contact = Schema.Struct({
   /** Free text on purpose — the Organization lives in its own cube, not folded in here. */
   company: Schema.NullOr(Schema.String),
   /** The one truth of the contact-to-organization relation. Nullable, opaque, caller-set. */
-  accountId: Schema.NullOr(Schema.String),
+  organizationId: Schema.NullOr(Schema.String),
 }).annotations({ identifier: "Contact" })
 
-/** The patch: a contact can move to another organization, or be unlinked (accountId null). */
+/** The patch: a contact can move to another organization, or be unlinked (organizationId null). */
 export const ContactPatch = Schema.Struct({
   name: Schema.optional(Schema.NonEmptyTrimmedString),
   email: Schema.optional(Schema.String),
   phone: Schema.optional(Schema.NullOr(Schema.String)),
   company: Schema.optional(Schema.NullOr(Schema.String)),
-  accountId: Schema.optional(Schema.NullOr(Schema.NonEmptyTrimmedString)),
+  organizationId: Schema.optional(Schema.NullOr(Schema.NonEmptyTrimmedString)),
 }).annotations({ identifier: "ContactPatch" })
 
 export const ContactCreate = Schema.Struct({
@@ -31,5 +31,5 @@ export const ContactCreate = Schema.Struct({
   email: Schema.optionalWith(Schema.String, { default: () => "" }),
   phone: Schema.optionalWith(Schema.NullOr(Schema.String), { default: () => null }),
   company: Schema.optionalWith(Schema.NullOr(Schema.String), { default: () => null }),
-  accountId: Schema.optionalWith(Schema.NullOr(Schema.NonEmptyTrimmedString), { default: () => null }),
+  organizationId: Schema.optionalWith(Schema.NullOr(Schema.NonEmptyTrimmedString), { default: () => null }),
 }).annotations({ identifier: "ContactCreate" })

@@ -1,5 +1,5 @@
 // The contacts list. Same generic component, different cube name (QWB-49);
-// the searchable accountId relation becomes the organization filter.
+// the searchable organizationId relation becomes the organization filter.
 import { CubeList } from "@/components/cube-list"
 
 export default function ContactsPage() {

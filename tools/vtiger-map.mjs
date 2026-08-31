@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// Maps an exported vtiger JSONL file into crm/accounts / crm/contacts through the qwbe API
-// (QWB-50). The staging set (optional --set) is the per-field profile step and the row-count
-// cross-check; the staging cube exposes no row-read endpoint, so the rows come from the same
-// export file that fed the set.
+// Maps an exported vtiger JSONL file into crm/organizations / crm/contacts through the qwbe
+// API (QWB-50; cube renamed QWB-54 ticket 12). The staging set (optional --set) is the
+// per-field profile step and the row-count cross-check; the staging cube exposes no row-read
+// endpoint, so the rows come from the same export file that fed the set.
 //
 // Idempotency: the vtiger id of each row is the external key. The vtigerId -> qwbeId
 // correspondence lives in a LEDGER file next to the export (<entity>-idmap.json, outside
@@ -10,10 +10,11 @@
 // same counts. (The cube schemas are fixed and carry no externalId field; the ledger is the
 // external-key store. If the cubes grow one, the ledger migrates.)
 //
-// Contacts: accountId comes from vtiger's own foreign key (contactdetails.accountid),
-// resolved through the accounts ledger. An organization that is missing from the ledger is
-// COUNTED and reported (count only, never the id); the contact gets accountId null and
-// nothing is invented. On a rerun a still-missing organization clears a stale accountId.
+// Contacts: organizationId comes from vtiger's own foreign key (contactdetails.accountid),
+// resolved through the accounts ledger (the ledger of the accounts export, source-side
+// naming). An organization that is missing from the ledger is COUNTED and reported (count
+// only, never the id); the contact gets organizationId null and nothing is invented. On a
+// rerun a still-missing organization clears a stale organizationId.
 //
 // Environment: QWBE_URL, QWBE_USER, QWBE_PASSWORD (all required; the tool exits 2
 // without them rather than silently authenticating as a default user).
@@ -78,7 +79,7 @@ const mapping = JSON.parse(readFileSync(mappingPath, "utf8"))
 const ledgerPath = join(dirname(file), `${mapping.entity}-idmap.json`)
 const ledger = existsSync(ledgerPath) ? JSON.parse(readFileSync(ledgerPath, "utf8")) : {}
 
-// For contacts: the accounts ledger resolves vtiger accountid -> qwbe accountId.
+// For contacts: the accounts ledger resolves vtiger accountid -> qwbe organizationId.
 const accountsLedgerPath = join(dirname(file), "accounts-idmap.json")
 const accountsLedger = existsSync(accountsLedgerPath) ? JSON.parse(readFileSync(accountsLedgerPath, "utf8")) : {}
 
@@ -140,14 +141,14 @@ for await (const line of rl) {
     const orgKey = row[mapping.accountKey]
     if (orgKey === undefined || orgKey === null || String(orgKey) === "0" || String(orgKey) === "") {
       tally.noOrg++
-      payload.accountId = null
+      payload.organizationId = null
     } else {
       const accId = accountsLedger[String(orgKey)]
-      if (accId) payload.accountId = accId
+      if (accId) payload.organizationId = accId
       else {
         // Counted, never quoted: a vtiger id is re-identifiable against the source DB.
         tally.missingOrg++
-        payload.accountId = null
+        payload.organizationId = null
       }
     }
   }
@@ -193,7 +194,7 @@ console.log(`created:    ${tally.created}`)
 console.log(`updated:    ${tally.updated}`)
 if (mapping.entity === "contacts") {
   console.log(`no org:     ${tally.noOrg} (contact has no organization in vtiger)`)
-  console.log(`missing org:${tally.missingOrg} (organization not among the imported accounts; accountId set to null; count only, ids never printed)`)
+  console.log(`missing org:${tally.missingOrg} (organization not among the imported accounts; organizationId set to null; count only, ids never printed)`)
 }
 console.log(`skipped:    ${tally.skipped} (empty required name or a mapping error)`)
 console.log(`no key:     ${tally.skippedNoKey} (row without ${mapping.key}; never POSTed, never recorded)`)

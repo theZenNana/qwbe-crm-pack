@@ -28,7 +28,7 @@ import { CubeList } from "@/components/cube-list"
 export type ChildList = {
   // The cube the child rows live in, e.g. "crm/contacts".
   cube: string
-  // The field on the child that points back to this row, e.g. "accountId".
+  // The field on the child that points back to this row, e.g. "organizationId".
   field: string
   label?: string
 }

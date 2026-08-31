@@ -1,5 +1,5 @@
 // One contact, assembled from metadata. The organization shows as a link
-// resolved through the relation metadata on accountId (QWB-49).
+// resolved through the relation metadata on organizationId (QWB-49).
 import { CubeDetail } from "@/components/cube-detail"
 
 export default function ContactDetailPage({ params }: { params: Promise<{ id: string }> }) {

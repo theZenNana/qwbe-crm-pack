@@ -1,21 +1,22 @@
 #!/usr/bin/env node
 // One-shot backfill for contact rows written before QWB-47 (QWB-54, ticket 07).
 //
-// Why: contacts stored before the accounts cube existed have NO accountId key at all, while
-// the Contact schema wants the key present and nullable. The kernel's generic list serves
-// rows exactly as stored, so such a row would fail response encoding. The cube used to hide
-// this by normalizing every response (`accountId: c.accountId ?? null`) -- a hand-written
-// handler is exactly what ticket 07 removes -- so instead the absence is fixed once, in the
-// data: accountId becomes NULL where the key is missing.
+// Why: contacts stored before the organizations cube existed have NO relation key at all,
+// while the Contact schema wants the key present and nullable. The kernel's generic list
+// serves rows exactly as stored, so such a row would fail response encoding. The cube used to
+// hide this by normalizing every response (`organizationId: c.organizationId ?? null`) -- a
+// hand-written handler is exactly what ticket 07 removes -- so instead the absence is fixed
+// once, in the data: organizationId becomes NULL where the key is missing. The key's name is
+// organizationId since the one-name rename (QWB-54, ticket 12).
 //
-// Idempotent: `body ? 'accountId'` is true iff the key exists (null included), so rows that
-// carry the key are never touched and a second run changes nothing. Safe against a live
+// Idempotent: `body ? 'organizationId'` is true iff the key exists (null included), so rows
+// that carry the key are never touched and a second run changes nothing. Safe against a live
 // store: one UPDATE, matched only on rows that lack the key.
 //
 // Connection (same contract as the qwbe probes, no password default):
-//   QWBE_DATABASE_URL=postgres://... node tools/backfill-contact-accountid.mjs
+//   QWBE_DATABASE_URL=postgres://... node tools/backfill-contact-organizationid.mjs
 // or the local-dev parts:
-//   QWBE_PG_PASSWORD=qwbe node tools/backfill-contact-accountid.mjs
+//   QWBE_PG_PASSWORD=qwbe node tools/backfill-contact-organizationid.mjs
 // With neither variable set the tool refuses to guess and exits 2.
 
 import pg from "pg"
@@ -26,10 +27,10 @@ export const TABLE = "contacts"
 
 /** The one statement, for any schema/table (tests use a scratch pair). */
 export const backfillSql = (schema = SCHEMA, table = TABLE) =>
-  `UPDATE "${schema}"."${table}" SET body = body || '{"accountId": null}'::jsonb WHERE NOT body ? 'accountId'`
+  `UPDATE "${schema}"."${table}" SET body = body || '{"organizationId": null}'::jsonb WHERE NOT body ? 'organizationId'`
 
 /** Runs the backfill and returns how many rows gained the key. */
-export const backfillAccountId = async (pool, schema = SCHEMA, table = TABLE) => {
+export const backfillOrganizationId = async (pool, schema = SCHEMA, table = TABLE) => {
   const result = await pool.query(backfillSql(schema, table))
   return result.rowCount ?? 0
 }
@@ -56,8 +57,8 @@ if (isMain) {
   }
   const pool = new pg.Pool({ connectionString: url, max: 1 })
   try {
-    const n = await backfillAccountId(pool)
-    console.log(`backfill done: ${n} contact row(s) gained accountId = null`)
+    const n = await backfillOrganizationId(pool)
+    console.log(`backfill done: ${n} contact row(s) gained organizationId = null`)
   } finally {
     await pool.end()
   }

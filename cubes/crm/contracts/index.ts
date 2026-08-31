@@ -11,8 +11,9 @@
 // that looks authoritative and means nothing. The summary and the `contracts:value` command
 // render per-currency, never a single grand total.
 //
-// What this cube is NOT: there is no ERP here. No account entity, no invoice, no settings —
-// the historical ERP package is a different package and stays out of the CRM restore.
+// What this cube is NOT: there is no ERP here. No organization entity of its own, no invoice,
+// no settings — the historical ERP package is a different package and stays out of the CRM
+// restore.
 //
 // Adapted (QWB-30) from the pre-QWB-19 source preserved at qwbe-packs onto `defineCube` and
 // the current public contract; behaviour unchanged.

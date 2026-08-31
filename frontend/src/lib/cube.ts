@@ -88,13 +88,13 @@ export type ListParams = {
   limit?: number
   sortBy?: string
   descending?: boolean
-  // Field filters (server-side equality, e.g. accountId on contacts). Keys are
+  // Field filters (server-side equality, e.g. organizationId on contacts). Keys are
   // field NAMES from the metadata, never hard-coded per entity here.
   filters?: Record<string, string>
 }
 
 // The single first path segment a cube serves under. qwbe mounts a child cube
-// ("crm/accounts") at "/<leaf>" (core/src/kernel/routes.ts routePrefixOf; a leaf
+// ("crm/organizations") at "/<leaf>" (core/src/kernel/routes.ts routePrefixOf; a leaf
 // that collides with a standalone cube is mounted as "<parent>-<name>"). The
 // HTTP prefix therefore comes from the leaf, never from the full cube name.
 export function httpPrefixOf(cube: string): string {
@@ -126,14 +126,14 @@ export async function apiFetch(
   return response
 }
 
-// Proxy path for a cube-relative qwbe path: the cube "crm/accounts" becomes
-// /api/qwbe/accounts, because that is the prefix the cube actually serves at.
+// Proxy path for a cube-relative qwbe path: the cube "crm/organizations" becomes
+// /api/qwbe/organizations, because that is the prefix the cube actually serves at.
 export function cubeApiPath(cube: string, suffix = ""): string {
   return `/api/qwbe/${httpPrefixOf(cube)}${suffix}`
 }
 
 // Metadata is under /catalog/{cube}/metadata and a child cube name
-// ("crm/accounts") is a single path parameter, so it must be percent-encoded.
+// ("crm/organizations") is a single path parameter, so it must be percent-encoded.
 export function metadataApiPath(cube: string): string {
   return `/api/qwbe/catalog/${encodeURIComponent(cube)}/metadata`
 }
@@ -256,9 +256,9 @@ export async function errorBody(response: Response): Promise<unknown> {
 // The frontend routes this app actually has. A relation whose target has no
 // route renders as plain text instead of a dead link.
 const RELATION_ROUTES: Record<string, string> = {
-  "crm/accounts": "/accounts",
+  "crm/organizations": "/organizations",
   "crm/contacts": "/contacts",
-  accounts: "/accounts",
+  organizations: "/organizations",
   contacts: "/contacts",
 }
 

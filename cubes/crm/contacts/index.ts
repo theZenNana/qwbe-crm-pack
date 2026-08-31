@@ -1,12 +1,13 @@
 // The CONTACTS cube — one half of the CRM plugin (two cubes and a sibling, one package).
 //
 // Domain: a CONTACT is a person the business deals with. `company` stays free text. Since
-// QWB-47 there IS an Organization entity (`crm/accounts`), and the relation to it has one
-// truth: `accountId` on the contact. It is nullable, opaque, and set by the caller — an
-// organization's contact list is derived by filtering this cube's list on `accountId`, not by
-// a related-list endpoint, and it is patchable: a contact can move to another organization or
-// be unlinked. This cube does not import the accounts cube; the manifest DECLARES the relation
-// target (`relations.accountId`) so the metadata endpoint can resolve ids to names — metadata,
+// QWB-47 there IS an Organization entity (`crm/organizations`), and the relation to it has one
+// truth: `organizationId` on the contact (one name everywhere, QWB-54 ticket 12). It is
+// nullable, opaque, and set by the caller — an organization's contact list is derived by
+// filtering this cube's list on `organizationId`, not by a related-list endpoint, and it is
+// patchable: a contact can move to another organization or be unlinked. This cube does not
+// import the organizations cube; the manifest DECLARES the relation target
+// (`relations.organizationId`) so the metadata endpoint can resolve ids to names — metadata,
 // not an import, and no coupling of code. The id is checked for shape here only: refusing a
 // well-formed id that does not exist needs a kernel-enforced relation, which does not exist
 // yet (see README.md).
@@ -36,8 +37,8 @@ const ENTITY = "Contact"
 type ContactRow = typeof Contact.Type
 
 // The list is the kernel's generic one (QWB-54, ticket 07): paging, sorting, `q` and the
-// `<field>=` filters all come from the manifest. `accountId` is filterable by construction —
-// the declared relation makes it a list filter — and that filter IS the derived contact list
+// `<field>=` filters all come from the manifest. `organizationId` is filterable by construction
+// — the declared relation makes it a list filter — and that filter IS the derived contact list
 // of an organization: no second endpoint, no related list, and no hand-written filter here.
 const group = HttpApiGroup.make("contacts")
   .add(
@@ -80,8 +81,10 @@ const summary = (c: ContactRow): SummaryRow => ({
 const manifest = {
   name: "contacts",
   // Opts the cube into the metadata drift gate (qwbe src/metadata/schema-drift.ts):
-  // an undeclared version means a schema change cannot be caught (QWB-54).
-  version: "1.0.0",
+  // an undeclared version means a schema change cannot be caught (QWB-54). The relation
+  // field was renamed to organizationId (QWB-54, ticket 12) — a schema change, so the
+  // version is bumped; a same-version different-hash mount would refuse to boot.
+  version: "1.1.0",
   parent: "crm",
   tables: [TABLE],
   entity: ENTITY,
@@ -89,8 +92,8 @@ const manifest = {
   // Declared, not resolved: the metadata endpoint publishes the target (and summaryById
   // resolution through it). A declared target is metadata, not an import — no code couples
   // the cubes. The kernel's generic list reads the SAME declaration to serve
-  // `?accountId=` as a list filter: the relation is filterable by construction.
-  relations: { accountId: { target: "crm/accounts" } },
+  // `?organizationId=` as a list filter: the relation is filterable by construction.
+  relations: { organizationId: { target: "crm/organizations" } },
   requiresAuth: true,
   permissions: [
     { name: "crm/contacts:read", roles: ["admin", "reader"] },
@@ -114,11 +117,11 @@ export const cube = defineCube(group, {
     ],
 
     handlers: {
-      // The kernel's list, not this cube's (QWB-54, ticket 07). Filtering by the accountId
-      // relation is served from the manifest's declared relation; the hand-written handler
-      // is gone. Rows stored before QWB-47 without the accountId KEY are fixed once by the
-      // one-shot backfill (tools/backfill-contact-accountid.mjs), not by normalizing every
-      // response here.
+      // The kernel's list, not this cube's (QWB-54, ticket 07). Filtering by the
+      // organizationId relation is served from the manifest's declared relation; the
+      // hand-written handler is gone. Rows stored before QWB-47 without the relation KEY are
+      // fixed once by the one-shot backfill (tools/backfill-contact-organizationid.mjs), not
+      // by normalizing every response here.
       list: genericList<ContactRow>({
         cube: "crm/contacts",
         table: TABLE,

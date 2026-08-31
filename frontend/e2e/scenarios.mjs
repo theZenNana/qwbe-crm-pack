@@ -53,7 +53,7 @@ export function closeStaleTabs() {
     const list = orca("tab", "list")
     for (const t of list.tabs ?? []) {
       const url = String(t.url ?? "")
-      if (/^http:\/\/localhost:\d+\/(login|accounts|contacts|me)/.test(url) && !tabs.includes(t.browserPageId)) {
+      if (/^http:\/\/localhost:\d+\/(login|organizations|contacts|me)/.test(url) && !tabs.includes(t.browserPageId)) {
         orca("tab", "close", "--page", t.browserPageId)
       }
     }
@@ -252,14 +252,14 @@ export async function scenarioLogin() {
 // --- 2. organization list: seeded rows, sorting, searching ----------------------
 export async function scenarioList() {
   const name = "organization list shows, sorts and searches the seeded organizations"
-  await open("/accounts")
+  await open("/organizations")
   await settle(ORG_A)
   let snap = snapshot()
-  shot("02-accounts-list")
+  shot("02-organizations-list")
   const showsBoth = snap.text.includes(ORG_A) && snap.text.includes(ORG_B)
   if (!showsBoth) {
-    shot("02-accounts-list-RED", { full: true })
-    return record(name, "RED", `list does not show both seeded orgs (${snap.origin})`, "02-accounts-list-RED.png")
+    shot("02-organizations-list-RED", { full: true })
+    return record(name, "RED", `list does not show both seeded orgs (${snap.origin})`, "02-organizations-list-RED.png")
   }
 
   // Sorting: click the Name header's sort BUTTON twice for a descending sort, then
@@ -277,7 +277,7 @@ export async function scenarioList() {
   await clickStable((v) => v.role === "button" && (v.name ?? "").startsWith("Name"))
   await waitForText("Name ↓")
   snap = snapshot()
-  shot("02-accounts-sorted-desc")
+  shot("02-organizations-sorted-desc")
   const betaFirst = snap.text.indexOf(ORG_B) >= 0 && snap.text.indexOf(ORG_B) < snap.text.indexOf(ORG_A)
   if (!betaFirst) {
     shot("02-sort-RED", { full: true })
@@ -301,14 +301,14 @@ export async function scenarioList() {
   const betaGone = !snapshot().text.includes(ORG_B)
   const narrowed = alphaShown && betaGone
   snap = snapshot()
-  shot("02-accounts-searched")
-  return record(name, narrowed ? "PASS" : "RED", narrowed ? "sorted desc and filtered to Alpha" : "filter did not narrow the list", "02-accounts-searched.png")
+  shot("02-organizations-searched")
+  return record(name, narrowed ? "PASS" : "RED", narrowed ? "sorted desc and filtered to Alpha" : "filter did not narrow the list", "02-organizations-searched.png")
 }
 
 // --- 3. inline edit on an editable field saves without a reload -----------------
 export async function scenarioInlineEdit(api) {
   const name = "inline edit on an editable field saves and shows without a reload"
-  await open("/accounts")
+  await open("/organizations")
   await settle(ORG_A)
   let snap = snapshot()
   // Unique per run: a previous run that crashed before teardown can leave its
@@ -390,7 +390,7 @@ export async function scenarioInlineEdit(api) {
   // the very text being waited for. Read the rows back through the API and
   // compare the field (the form of scenarioCustomFieldTypes). The value is
   // unique to this run, so the row that carries it can only be this run's save.
-  const rows = (await api.call("/accounts?limit=50")).body?.rows ?? []
+  const rows = (await api.call("/organizations?limit=50")).body?.rows ?? []
   const savedRow = rows.find((r) => r.billingCity === newValue)
   const verdict = saved && noError && Boolean(savedRow) ? "PASS" : "RED"
   const note = firstClickOpened ? "" : " (first click produced no editor; one freshly resolved retry)"
@@ -413,19 +413,19 @@ export async function scenarioNonEditable(api) {
   const name = "inline edit on a field the metadata marks not editable is refused"
   // The cube name is a single path parameter for qwbe, so it must be encoded;
   // unencoded it is two path segments and qwbe answers 404.
-  const meta = await api.call(`/catalog/${encodeURIComponent("crm/accounts")}/metadata`)
+  const meta = await api.call(`/catalog/${encodeURIComponent("crm/organizations")}/metadata`)
   const fields = meta.body?.fields ?? []
   const nonEditable = fields.find((f) => !f.editable && f.name !== "id" && f.name !== "type") ?? fields.find((f) => !f.editable)
   if (!nonEditable) {
     shot("04-noneditable-RED", { full: true })
     return record(name, "RED", "metadata exposes no non-editable column at all", "04-noneditable-RED.png")
   }
-  const row = (await api.call("/accounts?limit=1")).body?.rows?.[0]
+  const row = (await api.call("/organizations?limit=1")).body?.rows?.[0]
   if (!row) {
     shot("04-noneditable-RED", { full: true })
     return record(name, "RED", "no organization row available to open", "04-noneditable-RED.png")
   }
-  await open(`/accounts/${row.id}`)
+  await open(`/organizations/${row.id}`)
   const value = row[nonEditable.name]
   await settle(nonEditable.label)
   let snap = snapshot()
@@ -453,10 +453,10 @@ export async function scenarioNonEditable(api) {
 // --- 5. organization -> contact -> back to the organization ---------------------
 export async function scenarioNavigation(seed) {
   const name = "navigation organization to contact and back"
-  await open(`/accounts/${seed.orgA.id}`)
+  await open(`/organizations/${seed.orgA.id}`)
   await settle(CONTACT_LINKED)
   let snap = snapshot()
-  shot("05-account-detail")
+  shot("05-organization-detail")
   const contactLink = await clickStable((v) => v.name === CONTACT_LINKED && v.role !== "heading")
   if (!contactLink) {
     shot("05-nav-RED", { full: true })
@@ -474,10 +474,10 @@ export async function scenarioNavigation(seed) {
     shot("05-nav-RED", { full: true })
     return record(name, "RED", "contact detail does not link back to the organization", "05-nav-RED.png")
   }
-  const back = await waitForUrl(new RegExp(`.*/accounts/${seed.orgA.id}.*`))
+  const back = await waitForUrl(new RegExp(`.*/organizations/${seed.orgA.id}.*`))
   snap = snapshot()
-  shot("05-back-on-account")
-  return record(name, back ? "PASS" : "RED", back ? "round trip organization -> contact -> organization" : "did not land back on the organization", "05-back-on-account.png")
+  shot("05-back-on-organization")
+  return record(name, back ? "PASS" : "RED", back ? "round trip organization -> contact -> organization" : "did not land back on the organization", "05-back-on-organization.png")
 }
 
 // --- 6. logout returns to the login page and /me is no longer reachable ---------

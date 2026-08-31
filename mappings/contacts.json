@@ -1,7 +1,7 @@
 {
   "entity": "contacts",
   "route": "/contacts",
-  "comment": "Proposed default mapping (QWB-50): the fields the crm/contacts cube actually has. name is joined from firstname + lastname (salutation and title are dropped unless the owner says otherwise). accountId comes from vtiger's own foreign key contactdetails.accountid; a contact whose organization is not in the accounts ledger is created with accountId null and counted, never invented.",
+  "comment": "Proposed default mapping (QWB-50; relation field renamed QWB-54 ticket 12): the fields the crm/contacts cube actually has. name is joined from firstname + lastname (salutation and title are dropped unless the owner says otherwise). organizationId comes from vtiger's own foreign key contactdetails.accountid; a contact whose organization is not in the accounts ledger is created with organizationId null and counted, never invented.",
   "key": "vtigerId",
   "map": {
     "name": {

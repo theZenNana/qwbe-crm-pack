@@ -12,47 +12,74 @@ contract (`qwbe-core/cube`, `defineCube`). Installable via
 | --- | --- |
 | **CRM** | Sidebar hierarchy and lifecycle parent. Owns no domain table. |
 | **Contact** | A person the business deals with. Owned by the `crm/contacts` cube. |
-| **Organization** | The company a business deals with — the vtiger Accounts module, rebuilt (QWB-47). Owned by the `crm/accounts` cube. |
+| **Organization** | The company a business deals with — the vtiger Accounts module, rebuilt (QWB-47). Owned by the `crm/organizations` cube. One concept, one name (QWB-54, ticket 12): cube, table, route, permissions, command, event and the relation field all say Organization; "Account" survives only as the source system's own module name in the vtiger import mapping. |
 | **Contract** | A deal signed with a party. Owned by the `crm/contracts` cube. |
 | **party** | The other side of a contract, by id only (`Contract.partyId`, nullable). The cube that holds the party is NOT named: no import, no copied field, no join. |
 | **company** | Free text on a contact (`Contact.company`, nullable string). Kept even now that Organization exists: it is historical data, not a reference. |
 
+## One name: Organization (QWB-54, ticket 12)
+
+The same thing used to be named five ways: cube `crm/accounts`, entity `Organization`, table
+`organizations`, permissions `crm/accounts:*`, relation field `Contact.accountId`. Since the
+rename it is one name everywhere:
+
+- Cube, route, table, permissions (`crm/organizations:read|write`), command
+  (`crm/organizations:count`), event (`crm/organizations.created`) and the id prefix (`org_`)
+  all carry `organization`.
+- The relation field is **`Contact.organizationId`**. The contacts cube's schema version was
+  bumped to 1.1.0 for it (see "Versions" below).
+- The import mapping keeps the source-system names (`mappings/accounts.json`, vtiger columns
+  `account_no`, `account_type`): there the names come from vtiger, and the mapping is the one
+  place "account" legitimately remains. Our side of that mapping targets
+  `organizationNo` / `organizationType`.
+
+## No predecessor, declared honestly (QWB-54, tickets 08 and 12)
+
+The organizations cube declares **no `dataMigration`**: there is no cube it could honestly
+name as its source. The manifest once invented a migration from a cube called "organizations"
+that never existed, to satisfy a hierarchy gate — the fiction is deleted, and the kernel side
+that refuses an invented `dataMigration.from` is ticket 08.
+
 ## The relation to the Organization (decided QWB-47, replacing the old limit)
 
-The original restore had **no Account entity** on purpose. That limit was lifted by decision
-(QWB-47): vtiger's Organizations — the object the users worked in all day, about 60 thousand
-rows — are now the `crm/accounts` cube, entity `Organization`.
+The original restore had **no Organization entity** on purpose. That limit was lifted by
+decision (QWB-47): vtiger's Organizations — the object the users worked in all day, about 60
+thousand rows — are now the `crm/organizations` cube, entity `Organization`.
 
-The relation has ONE truth: **`Contact.accountId`**.
+The relation has ONE truth: **`Contact.organizationId`**.
 
 - It lives on the contact. Nullable, opaque, set by the caller at create time and correctable
-  by `PATCH /contacts/:id` (move to another organization, or unlink with `accountId: null`).
-- An organization's contacts are DERIVED: the contacts list takes an `accountId` filter
-  (`GET /contacts?accountId=...`). There is no related-list endpoint and no contactIds field.
-- The contacts manifest DECLARES the relation (`relations: { accountId: { target: "crm/accounts" } }`):
-  a declared target is metadata, not an import, and is what lets the metadata endpoint resolve
-  ids to names without coupling the cubes' code.
+  by `PATCH /contacts/:id` (move to another organization, or unlink with
+  `organizationId: null`).
+- An organization's contacts are DERIVED: the contacts list takes an `organizationId` filter
+  (`GET /contacts?organizationId=...`). There is no related-list endpoint and no contactIds field.
+- The contacts manifest DECLARES the relation
+  (`relations: { organizationId: { target: "crm/organizations" } }`): a declared target is
+  metadata, not an import, and is what lets the metadata endpoint resolve ids to names without
+  coupling the cubes' code.
 - The id is checked for shape only. Refusing a well-formed id that does not exist needs a
   kernel-enforced relation, which does not exist yet (the kernel offers cubes no cross-cube
   read); until it lands, such a create is accepted and the probe pins that behaviour, to be
   flipped to 400 when the enforcement arrives.
-- The `crm/accounts` fields are a photograph of the vtiger standard Accounts fields that
-  actually carry data — not a one-to-one copy. Left out: what is empty or vtiger-internal
-  (`notify_owner`, `parentid` — Account-to-Account hierarchy is out of scope), the custom
-  fields (`cf_*` — a separate system, not this pack), and `annualrevenue` (a bare integer with
-  no currency; money comes back only in minor units with a currency, as in contracts).
+- The `crm/organizations` fields are a photograph of the vtiger standard fields of the Accounts
+  module that actually carry data — not a one-to-one copy. Left out: what is empty or
+  vtiger-internal (`notify_owner`, `parentid` — an organization-to-organization hierarchy is
+  out of scope), the custom fields (`cf_*` — a separate system, not this pack), and
+  `annualrevenue` (a bare integer with no currency; money comes back only in minor units with
+  a currency, as in contracts).
 
 What stayed deliberate from the old limit: `Contact.company` is still text and references
 nothing, and `Contract.partyId` is still opaque. History is data, not a foreign key.
 
 ## Deletion (decision recorded for the ticket that adds it)
 
-There is no delete endpoint on `crm/accounts` in this ticket. When deletion comes, the rule is:
-an organization is refused deletion while any contact still references its id — the contact's
-`accountId` is the one truth, so deleting under it would leave `GET /contacts?accountId=X`
-returning rows whose `GET /accounts/X` is 404. The patch schema already refuses `deleted`, so
-the back door of `PATCH {"deleted": true}` is closed. Reconciliation (cascade, unlink, or
-refuse) is the decision of that ticket, made here explicit in advance.
+There is no delete endpoint on `crm/organizations` in this ticket. When deletion comes, the
+rule is: an organization is refused deletion while any contact still references its id — the
+contact's `organizationId` is the one truth, so deleting under it would leave
+`GET /contacts?organizationId=X` returning rows whose `GET /organizations/X` is 404. The patch
+schema already refuses `deleted`, so the back door of `PATCH {"deleted": true}` is closed.
+Reconciliation (cascade, unlink, or refuse) is the decision of that ticket, made here explicit
+in advance.
 
 ## The minimal relation (version one, stated and tested)
 
@@ -69,17 +96,26 @@ independence, and exercise the party id as data (set, nullable, opaque).
 fractions at the boundary. Totals are rendered **per currency**, never summed across
 currencies: `contracts:value` and the summary both follow that rule.
 
+## Versions
+
+Cubes that declare a `version` in their manifest are tracked by the kernel's metadata drift
+gate: the same version with a different schema hash refuses to boot. Bump the version on any
+schema change (QWB-54, ticket 20). History: `crm/contacts` is at 1.1.0 (the relation field was
+renamed `accountId` → `organizationId`, ticket 12); `crm/organizations` starts at 1.0.0 — the
+rename made it a first-seen cube name, so no cached client can hold metadata under the old
+identity.
+
 ## Layout
 
 ```
-qwbe-package.json            package manifest — CRM parent and three children
-cubes/crm/index.ts           hierarchy parent and `/crm` child catalogue
-cubes/crm/accounts/index.ts  Organization: table, API, permissions, commands
-cubes/crm/accounts/schema.ts Organization: the domain schemas (split for the size cap)
-cubes/crm/contacts/index.ts  Contact: table, API, schemas, permissions, commands
-cubes/crm/contracts/index.ts Contract: table, API, schemas, permissions, commands
-cubes/crm/*/index.test.ts    source-local contract tests
-probes/crm.mjs           runtime proof against a live kernel (scratch QWBE_DATA_DIR)
+qwbe-package.json                  package manifest — CRM parent and three children
+cubes/crm/index.ts                 hierarchy parent and `/crm` child catalogue
+cubes/crm/organizations/index.ts   Organization: table, API, permissions, commands
+cubes/crm/organizations/schema.ts  Organization: the domain schemas (split for the size cap)
+cubes/crm/contacts/index.ts        Contact: table, API, schemas, permissions, commands
+cubes/crm/contracts/index.ts       Contract: table, API, schemas, permissions, commands
+cubes/crm/*/index.test.ts          source-local contract tests
+probes/crm.mjs                     runtime proof against a live kernel (scratch QWBE_DATA_DIR)
 ```
 
 The cubes do not import each other. All use only exported `qwbe-core/*` package subpaths.
