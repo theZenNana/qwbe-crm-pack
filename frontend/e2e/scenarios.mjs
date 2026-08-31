@@ -184,7 +184,7 @@ export async function scenarioLogin() {
     const page = orca("eval", "--expression", "document.body.innerText.slice(0, 300)")
     console.log(`  login page after submit: ${JSON.stringify(page.result)}`)
   }
-  snap = snapshot()
+  const snap = snapshot()
   shot("01-after-login")
   const identityShown = landed && snap.origin.endsWith("/me") && textShown
   return record(
