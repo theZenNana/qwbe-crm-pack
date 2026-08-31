@@ -1,6 +1,5 @@
 import { redirect } from "next/navigation"
 
-import { Button } from "@/components/ui/button"
 import {
   Card,
   CardContent,
@@ -41,18 +40,21 @@ export default async function MePage() {
   const me = result.me
 
   return (
-    <main className="flex min-h-svh items-center justify-center p-4">
+    // flex-1, not min-h-svh: the nav above is part of the page now, and a full
+    // viewport height under it would push the card below the fold.
+    <main className="flex flex-1 items-center justify-center p-4">
       <Card className="w-full max-w-sm">
         <CardHeader>
           <CardDescription>Signed in as</CardDescription>
           <CardTitle>{String(me.username ?? "user")}</CardTitle>
         </CardHeader>
         <CardContent>
-          <form action="/api/logout" method="post">
-            <Button type="submit" variant="outline">
-              Log out
-            </Button>
-          </form>
+          {/* Logging out lives in the nav, on every page. A second button here
+              would say the same thing twice, and leave two controls with the
+              same accessible name for anyone reading the page by name. */}
+          <p className="text-sm text-muted-foreground">
+            Your qwbe account, as this app sees it.
+          </p>
         </CardContent>
       </Card>
     </main>
