@@ -600,9 +600,16 @@ export async function scenarioReader(qwbePort) {
     return record(name, "RED", `reader login did not land on the identity page (origin ${snap.origin}; text: ${snap.text.replace(/\s+/g, " ").slice(0, 200)})`, "08-reader-RED.png")
   }
   await open("/contacts")
-  await settle(CONTACT_LINKED)
+  // The seeded rows belong to the admin, and entity permissions are
+  // per-owner: a reader sees an empty list (or the access alert), NOT the
+  // seeded contact. Settle on the page heading, never on a seeded row.
+  await settle("Contacts")
   snap = snapshot()
   shot("08-reader-contacts")
+  if (snap.text.includes(CONTACT_LINKED)) {
+    shot("08-reader-RED", { full: true })
+    return record(name, "RED", "unexpected: the reader sees admin-owned rows", "08-reader-RED.png")
+  }
   const panelBtn = refFor(snap.refs, (n) => n === "Custom fields")
   if (panelBtn) {
     shot("08-reader-RED", { full: true })
