@@ -10,6 +10,7 @@ import {
   click,
   keypress,
   orca,
+  pageArgs,
   record,
   refFor,
   shot,
@@ -72,6 +73,44 @@ export function closeTabs() {
 async function settle(text, timeout = 30_000) {
   const ok = await waitForText(text, timeout)
   if (!ok) throw new Error(`page never showed ${JSON.stringify(text)}`)
+}
+
+// Short settle after a click that triggers a React render: the next snapshot
+// must see the DOM the click produced, not the one before it.
+const pause = async (ms = 800) => {
+  await new Promise((r) => setTimeout(r, ms))
+  // Touch the page with a trivial eval: the accessibility snapshot served
+  // right after a render can lag the DOM, and this forces Orca to re-read it.
+  try {
+    orca("eval", "--expression", "1", ...pageArgs())
+  } catch {
+    /* the touch is best effort; the wait below still applies */
+  }
+}
+
+/**
+ * Open a Radix Select through the browser only, retrying until an option shows.
+ *
+ * A CDP click on the radix Select trigger does not open it (the trigger wants
+ * a keydown, and the OS-level path is dead on a locked desktop), so: focus the
+ * trigger and dispatch a synthetic Enter keydown -- the same event radix
+ * handles -- then re-snapshot. Refs go stale across re-renders, so the caller
+ * must take a FRESH snapshot and click the option ref from it.
+ */
+async function openSelect(ref) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    orca("focus", "--element", ref, ...pageArgs())
+    orca(
+      "eval",
+      "--expression",
+      "(() => { const el = document.activeElement; if (!el || el.getAttribute('role') !== 'combobox') return 'no-combobox'; el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); return 'opened' })()",
+      ...pageArgs(),
+    )
+    await pause(800)
+    const snap = snapshot()
+    if (Object.values(snap.refs).some((v) => v.role === "option")) return true
+  }
+  return false
 }
 
 // --- 1. login with the correct credentials lands on the identity page -----------
@@ -171,21 +210,56 @@ export async function scenarioInlineEdit() {
   // The row for Alpha: editable cells carry buttons whose accessible name is
   // "Edit <label>"; the city column is "Billing City". The edit lands on the
   // first city-ish button and the row context is verified by the saved value.
-  const cityBtn = refFor(snap.refs, (n) => /^Edit .*City/i.test(n))
+  // Match the BUTTON ref: the table cell carries the same accessible name
+  // ("Edit Billing City") and clicking the cell does nothing.
+  const cityBtn = Object.entries(snap.refs).find(
+    ([, v]) => v.role === "button" && /^Edit .*City/i.test(v.name ?? ""),
+  )?.[0]
   if (!cityBtn) {
     shot("03-edit-RED", { full: true })
     return record(name, "RED", "no editable City cell button found", "03-edit-RED.png")
   }
-  click(cityBtn)
-  snap = snapshot()
-  // The open editor is a textbox labelled with the field's label ("Billing City");
-  // match the role, not just the name, so the column header cannot answer.
-  const target = Object.entries(snap.refs).find(
-    ([, v]) => v.role === "textbox" && /city/i.test(v.name ?? ""),
-  )?.[0]
+  // A click that lands before React has hydrated does nothing; retry the
+  // click until the editor input actually appears (or fail loudly below).
+  //
+  // The coordinate click through the accessibility ref is also unreliable on
+  // these cell buttons right after the rows render (observed 2026-08-31, live
+  // stack, e2e/debug10.mjs): the trusted pointer/mouse/click sequence reaches
+  // the button and its handler prop is attached, yet React does not run it —
+  // while the page's own activation of the very same button always does. So
+  // alternate the two, and let the fallback focus the ref and click the
+  // focused element; same affordance, same accessible name, no selector
+  // duplication.
+  const findEditor = (refs) =>
+    Object.entries(refs).find(([, v]) => v.role === "textbox" && /city/i.test(v.name ?? ""))?.[0]
+  let target
+  for (let attempt = 0; attempt < 3 && !target; attempt++) {
+    click(cityBtn)
+    await pause(1500)
+    snap = snapshot()
+    // The open editor is a textbox labelled with the field's label ("Billing City");
+    // match the role, not just the name, so the column header cannot answer.
+    target = findEditor(snap.refs)
+  }
+  if (!target) {
+    orca("focus", "--element", cityBtn, ...pageArgs())
+    orca(
+      "eval",
+      "--expression",
+      "(() => { const el = document.activeElement; if (!el || el.tagName !== 'BUTTON') return 'no-button'; el.click(); return 'clicked' })()",
+      ...pageArgs(),
+    )
+    await pause(1500)
+    snap = snapshot()
+    target = findEditor(snap.refs)
+  }
   if (!target) {
     shot("03-edit-RED", { full: true })
-    return record(name, "RED", "edit input did not open", "03-edit-RED.png")
+    const cityRefs = Object.entries(snap.refs)
+      .filter(([, v]) => /city/i.test(v.name ?? ""))
+      .map(([k, v]) => `${k}:${v.role}`)
+      .join(",")
+    return record(name, "RED", `edit input did not open; city refs: ${cityRefs}`, "03-edit-RED.png")
   }
   // The input is autofocused and carries the old value; replace it wholesale.
   keypress("ctrl+a")
@@ -355,7 +429,7 @@ export async function scenarioCustomField() {
     shot("07-define-RED", { full: true })
     return record(name, "RED", "type combobox not found in the definition form", "07-define-RED.png")
   }
-  click(typeCombo)
+  await openSelect(typeCombo)
   snap = snapshot()
   const selectOption = Object.entries(snap.refs).find(([, v]) => v.role === "option" && v.name === "select")?.[0]
   if (!selectOption) {
@@ -391,7 +465,9 @@ export async function scenarioCustomField() {
   }
 
   // 3. set it inline on the seeded contact
-  const editBtn = refFor(snap.refs, `Edit ${CF_LABEL}`)
+  const editBtn = Object.entries(snap.refs).find(
+    ([, v]) => v.role === "button" && v.name === `Edit ${CF_LABEL}`,
+  )?.[0]
   if (!editBtn) {
     shot("07-inline-RED", { full: true })
     return record(name, "RED", "no inline edit affordance on the custom column", "07-inline-RED.png")
@@ -403,7 +479,7 @@ export async function scenarioCustomField() {
     shot("07-inline-RED", { full: true })
     return record(name, "RED", "the custom cell did not open a select", "07-inline-RED.png")
   }
-  click(cellCombo)
+  await openSelect(cellCombo)
   snap = snapshot()
   const emailOption = Object.entries(snap.refs).find(([, v]) => v.role === "option" && v.name === "email")?.[0]
   if (!emailOption) {
@@ -420,7 +496,11 @@ export async function scenarioCustomField() {
   }
 
   // 4. delete the definition; the column disappears on the next metadata read
-  const deleteBtn = refFor(snap.refs, `Delete ${CF_LABEL}`)
+  await pause()
+  snap = snapshot()
+  const deleteBtn = Object.entries(snap.refs).find(
+    ([, v]) => v.role === "button" && v.name === `Delete ${CF_LABEL}`,
+  )?.[0]
   if (!deleteBtn) {
     shot("07-delete-RED", { full: true })
     return record(name, "RED", "delete button for the definition not found", "07-delete-RED.png")
@@ -439,7 +519,9 @@ export async function scenarioCustomField() {
   return record(
     name,
     columnGone ? "PASS" : "RED",
-    columnGone ? "column appeared, was set inline, and disappeared after the definition was deleted" : `column ${CF_LABEL} still present after delete`,
+    columnGone
+      ? "column appeared, was set inline, and disappeared after the definition was deleted"
+      : `column ${CF_LABEL} still present after delete; page text: ${snap.text.replace(/\s+/g, " ").slice(0, 300)}`,
     "07-column-gone.png",
   )
 }

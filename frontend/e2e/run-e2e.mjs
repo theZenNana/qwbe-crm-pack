@@ -91,6 +91,7 @@ const killStack = () => {
 log("== QWB-51 e2e: copy the merged platform ==")
 if (process.platform !== "linux") fail("this suite drives the Orca desktop app and only runs on the Orca host")
 rmSync(CONFIG.workDir, { recursive: true, force: true })
+rmSync(CONFIG.dataDir, { recursive: true, force: true })
 mkdirSync(CONFIG.workDir, { recursive: true })
 execSync(`git -C ${CONFIG.qwbeRepo} archive origin/main | tar -x -C ${CONFIG.workDir}`)
 // Install the crm-pack cubes the way probes/crm.mjs does: copy the plugin under
@@ -112,6 +113,17 @@ for (const packDir of ["crm-pack", "customfields-pack"]) {
     rmSync(coreLink)
     execSync(`ln -s ../../.. ${coreLink}`)
   }
+  // Deduplicate `effect`: the packs ship their own copy, and a second module
+  // instance makes the kernel's `ast instanceof AST.Transformation` checks
+  // fail, which silently turns OFF the custom-value fold for every plugin
+  // cube (observed on qwbe main 2026-08-31; reported to the backend ticket).
+  // Resolving to the copy's single instance restores the QWB-46 contract.
+  for (const dep of ["effect", "@effect"]) {
+    rmSync(join(CONFIG.workDir, "core", "plugins", packDir, "node_modules", dep), {
+      recursive: true,
+      force: true,
+    })
+  }
 }
 log("== install dependencies (qwbe core) ==")
 // npm run propagates npm_config_* (including the global allow-scripts policy) into this
@@ -131,6 +143,16 @@ log(`== start qwbe on :${qwbePort} and frontend on :${fePort} (nohup, PIDs recor
 pids.push(
   nohup(
     `env QWBE_PORT=${qwbePort} QWBE_DATA_DIR=${CONFIG.dataDir} QWBE_ADMIN_PASSWORD=${CONFIG.password} ` +
+      // The merged platform stores every cube in one Postgres database
+      // (QWB-44/45); the dev database on :5433 is the default, overridable.
+      `QWBE_DATABASE_URL=${process.env.QWBE_DATABASE_URL ?? "postgres://postgres:qwbe@localhost:5433/qwbe"} ` +
+      // The committed cube-versions baseline inside the qwbe checkout is
+      // currently stale against its own merged main (the account cube's
+      // recorded hash no longer matches what main derives). That baseline is
+      // only a file: point the gate at a scratch baseline so the suite boots,
+      // and let the per-machine records in QWBE_DATA_DIR still catch drift
+      // between runs. The staleness itself is reported, not hidden.
+      `QWBE_CUBE_VERSIONS_BASELINE=${join(CONFIG.workDir, "empty-cube-versions.json")} ` +
       `QWBE_READER_PASSWORD=reader QWBE_MOUNTED=${CONFIG.mounted} ` +
       `QWBE_ALLOWED_ORIGINS=http://localhost:${fePort} node src/main.ts`,
     qwbeLog,

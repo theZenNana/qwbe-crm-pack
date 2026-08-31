@@ -161,7 +161,33 @@ export function refFor(refs, match) {
 }
 
 export const click = (ref) => orca("click", "--element", ref, ...pageArgs())
-export const type = (text) => orca("type", "--input", text, ...pageArgs())
+/**
+ * Type at the current focus, through the browser, not the desktop.
+ *
+ * The OS-level `orca type` needs a focused desktop window; on a locked screen
+ * it reports ok and lands nothing (observed 2026-08-31, three runs). The CDP
+ * path below has the same semantics for the inputs this suite types into: the
+ * value is set through the native setter (so React's controlled inputs see
+ * it) and an `input` event is dispatched, exactly what a keystroke does.
+ */
+export function type(text) {
+  const payload = JSON.stringify(text)
+  const r = orca(
+    "eval",
+    "--expression",
+    `(() => {
+      const el = document.activeElement
+      if (!el || !(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) return "no-input-focus"
+      const proto = el instanceof HTMLInputElement ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype
+      Object.getOwnPropertyDescriptor(proto, "value").set.call(el, ${payload})
+      el.dispatchEvent(new Event("input", { bubbles: true }))
+      return "typed:" + el.value
+    })()`,
+    ...pageArgs(),
+  )
+  if (typeof r?.result === "string" && r.result.startsWith("typed:")) return r.result
+  throw new Error(`type(${payload}) landed nowhere: ${JSON.stringify(r).slice(0, 200)}`)
+}
 export const keypress = (key) => orca("keypress", "--key", key, ...pageArgs())
 
 /** Wait for a condition (orca wait), swallowing only the timeout error. */
@@ -208,10 +234,26 @@ export async function waitForUrl(pattern, timeout = 15_000) {
   }
 }
 
-/** Full-page or viewport screenshot saved into the results directory. */
+/** Full-page or viewport screenshot saved into the results directory.
+ *
+ * A locked or unfocused desktop makes CDP's Page.captureScreenshot time out
+ * ("the browser tab may not be visible or the window may not have focus")
+ * while every snapshot/click/type path keeps working. That is an environment
+ * condition, not a scenario verdict, so ONLY that error degrades: the miss is
+ * said out loud, the returned marker is written into the ledger, and the
+ * scenario's verdict stays whatever its snapshot assertions prove. Any other
+ * screenshot failure still raises.
+ */
 export function shot(name, { full = false } = {}) {
-  const r = full ? orca("full-screenshot", ...pageArgs()) : orca("screenshot", ...pageArgs())
-  return saveScreenshot(name, Buffer.from(r.data, "base64"))
+  try {
+    const r = full ? orca("full-screenshot", ...pageArgs()) : orca("screenshot", ...pageArgs())
+    return saveScreenshot(name, Buffer.from(r.data, "base64"))
+  } catch (e) {
+    if (!String(e.message).includes("may not be visible or the window may not have focus")) throw e
+    const marker = "(screenshot unavailable: desktop window not visible)"
+    console.log(`  WARN screenshot ${name}: ${marker}`)
+    return marker
+  }
 }
 
 // ---------------------------------------------------------------------------
