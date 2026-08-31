@@ -143,6 +143,22 @@ log("== install dependencies (qwbe core) ==")
 const npmEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("npm_config_")))
 execSync("npm ci --no-audit --no-fund --loglevel=error", { cwd: join(CONFIG.workDir, "core"), stdio: "inherit", env: /** @type {NodeJS.ProcessEnv} */ (npmEnv) })
 
+// A database of this run's own, never the developer's.
+//
+// Sharing the dev database is not only about stray rows: qwbe's logout drops
+// EVERY session of the account it is called for ("logout means everywhere",
+// core/src/cubes/auth/index.ts), and the session table lives in that database.
+// The logout scenario therefore signed the owner out of his own stack, from a
+// throwaway kernel on another port (measured 2026-08-31). The kernel already
+// ships the helper this needs, so the suite gets a fresh database and drops it
+// again at teardown. QWBE_DATABASE_URL still overrides, for a run that must
+// point somewhere specific.
+const { createTestDatabase } = await import(join(CONFIG.workDir, "core", "src", "pg", "test-db.ts"))
+const db = process.env.QWBE_DATABASE_URL
+  ? { url: process.env.QWBE_DATABASE_URL, drop: async () => {} }
+  : await createTestDatabase("e2e")
+log(`== database for this run: ${db.url.replace(/:[^:@/]*@/, ":***@")} ==`)
+
 const qwbePort = CONFIG.qwbePort || (await freePort())
 const fePort = CONFIG.frontendPort || (await freePort())
 if (isForbiddenPort(qwbePort) || isForbiddenPort(fePort)) fail("picked a forbidden port (4500/4510)")
@@ -156,8 +172,8 @@ pids.push(
   nohup(
     `env QWBE_PORT=${qwbePort} QWBE_DATA_DIR=${CONFIG.dataDir} QWBE_ADMIN_PASSWORD=${CONFIG.password} ` +
       // The merged platform stores every cube in one Postgres database
-      // (QWB-44/45); the dev database on :5433 is the default, overridable.
-      `QWBE_DATABASE_URL=${process.env.QWBE_DATABASE_URL ?? "postgres://postgres:qwbe@localhost:5433/qwbe"} ` +
+      // (QWB-44/45); this run has its own, created above.
+      `QWBE_DATABASE_URL=${db.url} ` +
       // The committed cube-versions baseline inside the qwbe checkout is
       // currently stale against its own merged main (the account cube's
       // recorded hash no longer matches what main derives). That baseline is
@@ -254,6 +270,7 @@ try {
   if (api) await seedDown(api).catch((e) => console.error(`teardown: seed deletion failed: ${e.message}`))
   else console.log("teardown: nothing seeded (no session); the scratch data dir is deleted with the work directory")
   killStack()
+  await db.drop().catch((e) => console.error(`teardown: dropping the run database failed: ${e.message}`))
   rmSync(CONFIG.workDir, { recursive: true, force: true })
 
   const results = writeResults([
