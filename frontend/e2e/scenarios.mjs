@@ -107,6 +107,17 @@ async function clickStable(pred, name) {
   return null
 }
 
+/** Find a ref with fresh snapshots (no click; focus must stay where it is). */
+async function findStable(pred) {
+  for (let i = 0; i < 8; i++) {
+    const snap = snapshot()
+    const ref = Object.entries(snap.refs).find(([, v]) => pred(v))?.[0]
+    if (ref) return ref
+    await new Promise((r) => setTimeout(r, 500))
+  }
+  return null
+}
+
 async function settle(text, timeout = 30_000) {
   const ok = await waitForText(text, timeout)
   if (!ok) throw new Error(`page never showed ${JSON.stringify(text)}`)
@@ -681,7 +692,9 @@ const N_LABEL = "E2E Note"
 async function defineField(name, label, typeName, options) {
   for (let i = 0; i < 20; i++) {
     const nameBox = await clickStable((v) => v.role === "textbox" && v.name === "Name", "Name")
-    const typeCombo = await clickStable((v) => v.role === "combobox" && /type/i.test(v.name ?? ""))
+    // The combobox is only LOOKED UP here: clicking it would move the focus
+    // away from the name box the next type() must land in.
+    const typeCombo = await findStable((v) => v.role === "combobox" && /type/i.test(v.name ?? ""))
     if (nameBox && typeCombo) {
       keypress("ctrl+a")
       type(name)
