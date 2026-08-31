@@ -1,3 +1,4 @@
+// @ts-check
 // Shared helpers for the Orca-driven end-to-end scenarios (QWB-51).
 //
 // Plain Node, no new dependencies. Three concerns live here:

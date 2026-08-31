@@ -1,3 +1,4 @@
+// @ts-check
 // Diagnostic for the login scenario: prints what each step actually returns, so a RED verdict
 // can be traced to the step that produced it instead of guessed at. Not part of `npm run e2e`.
 //

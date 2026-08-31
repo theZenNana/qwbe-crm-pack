@@ -1,3 +1,4 @@
+// @ts-check
 // One command runs everything (QWB-51): npm run e2e
 //
 // 1. Copies the merged qwbe platform from its repository WITHOUT touching the repository
@@ -39,7 +40,7 @@ const freePort = async () => {
       const srv = createServer()
       srv.on("error", () => resolve(0))
       srv.listen(0, "127.0.0.1", () => {
-        const { port } = srv.address()
+        const { port } = /** @type {import("node:net").AddressInfo} */ (srv.address())
         srv.close(() => resolve(port))
       })
     })
@@ -140,7 +141,7 @@ log("== install dependencies (qwbe core) ==")
 // npm run propagates npm_config_* (including the global allow-scripts policy) into this
 // process; a project-scoped install rejects the flag, so strip it for the copy's install.
 const npmEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("npm_config_")))
-execSync("npm ci --no-audit --no-fund --loglevel=error", { cwd: join(CONFIG.workDir, "core"), stdio: "inherit", env: npmEnv })
+execSync("npm ci --no-audit --no-fund --loglevel=error", { cwd: join(CONFIG.workDir, "core"), stdio: "inherit", env: /** @type {NodeJS.ProcessEnv} */ (npmEnv) })
 
 const qwbePort = CONFIG.qwbePort || (await freePort())
 const fePort = CONFIG.frontendPort || (await freePort())
