@@ -82,13 +82,18 @@ const manifest = {
   name: "contacts",
   // Opts the cube into the metadata drift gate (qwbe src/metadata/schema-drift.ts):
   // an undeclared version means a schema change cannot be caught (QWB-54). The relation
-  // field was renamed to organizationId (QWB-54, ticket 12) — a schema change, so the
-  // version is bumped; a same-version different-hash mount would refuse to boot.
-  version: "1.1.0",
+  // field was renamed to organizationId (QWB-54, ticket 12 — 1.1.0) and externalId was
+  // added for the import's idempotency (QWB-54, ticket 13 — 1.2.0): a schema change with
+  // the version held still would refuse to boot at mount.
+  version: "1.2.0",
   parent: "crm",
   tables: [TABLE],
   entity: ENTITY,
   sortable: ["name", "company", "createdAt"],
+  // The external identity is a list filter: the import (QWB-54, ticket 13) looks a contact
+  // up by `?externalId=vtiger:<id>` through the kernel's generic list before it creates
+  // one. The same declaration is what relational.search serves on the links route.
+  searchable: ["externalId"],
   // Declared, not resolved: the metadata endpoint publishes the target (and summaryById
   // resolution through it). A declared target is metadata, not an import — no code couples
   // the cubes. The kernel's generic list reads the SAME declaration to serve

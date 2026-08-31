@@ -96,14 +96,43 @@ independence, and exercise the party id as data (set, nullable, opaque).
 fractions at the boundary. Totals are rendered **per currency**, never summed across
 currencies: `contracts:value` and the summary both follow that rule.
 
+## The external identity and the idempotent import (QWB-54, ticket 13)
+
+Every IMPORTABLE cube carries **`externalId`** — the row's own identity from its source
+system, spelled `vtiger:<crmid>` by the vtiger import. `crm/contracts` is not importable (no
+mapping, no import writes it), so it declares no external identity. The rules:
+
+- **Uniqueness lives in the DATABASE, not in the application.** Each importable table holds a
+  partial unique index on `body->>'externalId'` (live rows, non-null values only — a row
+  created by hand has no source system, and a soft-deleted row does not block its identity
+  from being imported again). The index is ensured by `tools/ensure-external-id-index.mjs`,
+  which the import tool runs before its first write; it can also be run standalone for both
+  cubes. A plugin cube cannot create the index itself: the kernel's per-cube role holds DML
+  only, and Postgres refuses `CREATE INDEX` to anyone but the table's owner.
+- **The import asks before it creates.** The map tool looks each row up through the generic
+  list's `?externalId=` filter (the ticket-06 list contract; the field is declared in the
+  cubes' `searchable`) and POSTs only when the row is missing. The old
+  `<entity>-idmap.json` ledger files are GONE — there is no file left to lose: a run killed
+  at half and rerun ends with exactly one row per external identity.
+- **A run with rejected rows fails.** Rows the tool refuses (cube rejections, mapping errors,
+  rows without their external key) make the exit code 1, with the rejected count in the last
+  output line. `--max-rejects <n>` sets the explicit threshold for runs where rejections are
+  accepted. No row value is ever printed — counts, HTTP statuses and field names only.
+
+The map tool needs a database connection (`QWBE_DATABASE_URL`, or `QWBE_PG_PASSWORD` plus
+optional `QWBE_PG_HOST/PORT/USER`) alongside the API credentials, because of the index. Rows
+stored before this ticket lack the `externalId` KEY; the one-shot backfill
+(`tools/backfill-contact-organizationid.mjs`) fills it with null on both cubes, the same way
+it fills `organizationId` on contacts.
+
 ## Versions
 
 Cubes that declare a `version` in their manifest are tracked by the kernel's metadata drift
 gate: the same version with a different schema hash refuses to boot. Bump the version on any
-schema change (QWB-54, ticket 20). History: `crm/contacts` is at 1.1.0 (the relation field was
-renamed `accountId` → `organizationId`, ticket 12); `crm/organizations` starts at 1.0.0 — the
-rename made it a first-seen cube name, so no cached client can hold metadata under the old
-identity.
+schema change (QWB-54, ticket 20). History: `crm/contacts` is at 1.2.0 (1.1.0: the relation
+field was renamed `accountId` → `organizationId`, ticket 12; 1.2.0: `externalId` added,
+ticket 13); `crm/organizations` is at 1.1.0 (1.0.0 at the rename — a first-seen cube name,
+ticket 20; 1.1.0: `externalId` added, ticket 13); `crm/contracts` is at 1.0.0.
 
 ## Layout
 

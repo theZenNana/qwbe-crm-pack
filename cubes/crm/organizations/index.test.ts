@@ -13,7 +13,7 @@ import { describe, it } from "node:test"
 import { Cause, Effect, Exit, Schema } from "effect"
 import { type CubeTools, validateCubeParts } from "qwbe-core/cube"
 import { CurrentUser, requirePermission } from "qwbe-core/auth"
-import { OrganizationPatch } from "./schema.ts"
+import { OrganizationCreate, OrganizationPatch } from "./schema.ts"
 import type { Forbidden, NotFound } from "qwbe-core/errors"
 import { cube } from "./index.ts"
 
@@ -145,6 +145,20 @@ describe("organizations cube contract", () => {
     )
     const miss = await Effect.runPromise(summaryById("org_none"))
     assert.equal(miss, undefined)
+  })
+
+  it("carries the external identity the import deduplicates on (QWB-54, ticket 13)", () => {
+    // externalId ("vtiger:<crmid>") is on the row schema (nullable: rows created by hand
+    // have no source system), defaulted on create, and published as a list filter -- that
+    // filter IS the import's lookup before create. Uniqueness lives in the DATABASE: the
+    // partial unique index is ensured by tools/ensure-external-id-index.mjs, because a
+    // plugin cube's role holds DML only and cannot create indexes.
+    assert.equal(cube.manifest.version, "1.1.0")
+    assert.ok(cube.manifest.searchable?.includes("externalId"))
+    const decode = Schema.decodeUnknownEither(OrganizationCreate)
+    const created = decode({ name: "Ada Industries SRL" })
+    assert.ok(created._tag === "Right")
+    if (created._tag === "Right") assert.equal(created.right.externalId, null)
   })
 
   it("the patch schema refuses the meta fields and bad values", () => {

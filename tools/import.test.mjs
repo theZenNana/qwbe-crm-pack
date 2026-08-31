@@ -16,7 +16,7 @@
 // <QWBE_REPO>/core to a temp dir, drops this plugin into its plugins/ directory and boots
 // that. The qwbe checkout itself is never written.
 
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { after, before, describe, it } from "node:test"
@@ -25,7 +25,7 @@ import { execFileSync, spawn } from "node:child_process"
 import pg from "pg"
 
 import { buildQuery, cfColumnQuery, ENTITIES } from "./vtiger-export-query.mjs"
-import { mapRow, rowKey } from "./vtiger-map-lib.mjs"
+import { externalKey, mapRow, rowKey } from "./vtiger-map-lib.mjs"
 
 const here = new URL(".", import.meta.url).pathname
 const repoRoot = join(here, "..")
@@ -97,12 +97,20 @@ describe("vtiger row mapping", () => {
     const { payload } = mapRow(contactsFixture[0], contactsMapping)
     assert.equal(payload.name, "Andrei Exemplu")
     assert.equal(payload.email, "andrei@alpha-trading.example")
-    assert.equal(payload.organizationId, undefined) // resolved by the tool from the ledger, not here
+    assert.equal(payload.organizationId, undefined) // resolved by the tool from the externalId lookup, not here
   })
 
   it("keeps the row key stable", () => {
     assert.equal(rowKey(accountsFixture[0], accountsMapping), "900001")
     assert.equal(rowKey({}, accountsMapping), null)
+  })
+
+  it("builds the external identity a row is stored under (QWB-54, ticket 13)", () => {
+    // "vtiger:<crmid>": one name for source system and source row, guarded by the unique
+    // index in the database. A row without its key has no external identity at all.
+    assert.equal(externalKey(accountsFixture[0], accountsMapping), "vtiger:900001")
+    assert.equal(externalKey({ vtigerId: 12 }, accountsMapping), "vtiger:12")
+    assert.equal(externalKey({}, accountsMapping), null)
   })
 })
 
@@ -111,11 +119,20 @@ describe("vtiger row mapping", () => {
 const qwbeRepo = process.env.QWBE_REPO
 
 describe("import chain end-to-end (synthetic fixture, throwaway kernel)", { skip: !qwbeRepo && "QWBE_REPO not set" }, () => {
-  let stopServer, dataDir, port, base
+  let stopServer, dataDir, port, base, dbUrl
   const run = (tool, args, env = {}) =>
     execFileSync(process.execPath, [join(here, tool), ...args], {
       encoding: "utf8",
-      env: { ...process.env, QWB50_TEST_UNSAFE_INPUT: "1", QWBE_USER: "admin", QWBE_PASSWORD: "admin", ...env },
+      env: {
+        ...process.env,
+        QWB50_TEST_UNSAFE_INPUT: "1",
+        QWBE_USER: "admin",
+        QWBE_PASSWORD: "admin",
+        // The map tool needs the database too: it ensures the unique index on externalId
+        // before its first write (QWB-54, ticket 13). The throwaway DB IS the kernel's DB.
+        QWBE_DATABASE_URL: dbUrl,
+        ...env,
+      },
     })
 
   before(async () => {
@@ -147,8 +164,9 @@ describe("import chain end-to-end (synthetic fixture, throwaway kernel)", { skip
     const admin = new pg.Pool({ connectionString: adminUrl.toString(), max: 1 })
     await admin.query(`CREATE DATABASE "${dbName}"`)
     await admin.end()
-    const dbUrl = new URL(adminUrl.toString())
-    dbUrl.pathname = `/${dbName}`
+    const url = new URL(adminUrl.toString())
+    url.pathname = `/${dbName}`
+    dbUrl = url.toString()
 
     dataDir = core
     const proc = spawn(process.execPath, ["src/main.ts"], {
@@ -158,7 +176,7 @@ describe("import chain end-to-end (synthetic fixture, throwaway kernel)", { skip
         QWBE_PORT: String(port),
         QWBE_ADMIN_PASSWORD: "admin",
         QWBE_READER_PASSWORD: "reader",
-        QWBE_DATABASE_URL: dbUrl.toString(),
+        QWBE_DATABASE_URL: dbUrl,
       },
       stdio: ["ignore", "pipe", "pipe"],
     })
@@ -232,6 +250,18 @@ describe("import chain end-to-end (synthetic fixture, throwaway kernel)", { skip
     return r.total
   }
 
+  // Direct read access to the throwaway database: the ticket's proof is a SQL count
+  // (rows == distinct external ids), which no HTTP endpoint serves -- on purpose.
+  const dbQuery = async (sql) => {
+    const c = new pg.Client({ connectionString: dbUrl })
+    await c.connect()
+    try {
+      return await c.query(sql)
+    } finally {
+      await c.end()
+    }
+  }
+
   it("uploads, maps, reports the missing organization, and a second run changes nothing", async () => {
     const accountsFile = writeJsonl(accountsFixture, "accounts.jsonl")
     const contactsFile = writeJsonl(contactsFixture, "contacts.jsonl")
@@ -296,15 +326,23 @@ describe("import chain end-to-end (synthetic fixture, throwaway kernel)", { skip
     assert.match(ver, /organization missing=1/)
   })
 
-  it("prints status and field name, never row values, when the cube rejects a row", async () => {
+  it("prints status and field name, never row values, exits non-zero, when the cube rejects a row", async () => {
     const good = { ...accountsFixture[0], vtigerId: 940001, accountid: 940001, account_no: "FIX-ACC-G", accountname: "Gamma Proof SRL" }
     const bad = { ...accountsFixture[0], vtigerId: 940002, accountid: 940002, account_no: "FIX-ACC-B", accountname: "Delta Proof SRL", employees: -7 }
     const file = join(work, "accounts-reject.jsonl")
     writeFileSync(file, [good, bad].map((r) => JSON.stringify(r)).join("\n") + "\n")
-    const out = run("vtiger-map.mjs", [file, join(here, "../mappings/accounts.json")], { QWBE_URL: base })
+    // One rejected row and the default threshold of zero: the run FAILS (QWB-54, ticket 13).
+    const { out, status } = runFailing("vtiger-map.mjs", [file, join(here, "../mappings/accounts.json")], {
+      QWBE_URL: base,
+      QWBE_DATABASE_URL: dbUrl,
+    })
+    assert.equal(status, 1)
     assert.match(out, /HTTP 400/)
     assert.match(out, /employees/)
     assert.match(out, /errors:\s+1/)
+    // the count is in the LAST line, so a wrapper script can read it
+    const lines = out.trim().split("\n")
+    assert.match(lines[lines.length - 1], /rejected:\s+1 of 2 row\(s\) \(max accepted: 0\)/)
     // nothing from the rejected row (nor the good one) may appear in the output
     assert.ok(!out.includes("Delta Proof"))
     assert.ok(!out.includes("Gamma Proof"))
@@ -312,7 +350,22 @@ describe("import chain end-to-end (synthetic fixture, throwaway kernel)", { skip
     assert.ok(!out.includes("-7"))
   })
 
-  it("flushes the ledger so a mid-run kill and rerun leaves no duplicates", async () => {
+  it("accepts rejections up to an explicit --max-rejects threshold and exits zero", async () => {
+    const good = { ...accountsFixture[0], vtigerId: 940003, accountid: 940003, account_no: "FIX-ACC-T", accountname: "Threshold Proof SRL" }
+    const bad = { ...accountsFixture[0], vtigerId: 940004, accountid: 940004, account_no: "FIX-ACC-U", accountname: "Threshold Bad SRL", employees: -7 }
+    const file = join(work, "accounts-threshold.jsonl")
+    writeFileSync(file, [good, bad].map((r) => JSON.stringify(r)).join("\n") + "\n")
+    const before = await qwbeCount("organizations")
+    const out = run("vtiger-map.mjs", [file, join(here, "../mappings/accounts.json"), "--max-rejects", "1"], { QWBE_URL: base })
+    assert.match(out, /errors:\s+1/)
+    const lines = out.trim().split("\n")
+    assert.match(lines[lines.length - 1], /rejected:\s+1 of 2 row\(s\) \(max accepted: 1\)/)
+    // the good row landed, the rejected one did not
+    assert.equal(await qwbeCount("organizations"), before + 1)
+    assert.match(out, /created:\s+1/)
+  })
+
+  it("a mid-run kill and rerun leaves rows equal to distinct external ids (QWB-54, ticket 13)", async () => {
     const rows = Array.from({ length: 8 }, (_, i) => ({
       ...accountsFixture[0],
       vtigerId: 950001 + i,
@@ -325,10 +378,10 @@ describe("import chain end-to-end (synthetic fixture, throwaway kernel)", { skip
     const before = await qwbeCount("organizations")
 
     const child = spawn(process.execPath, [join(here, "vtiger-map.mjs"), file, join(here, "../mappings/accounts.json")], {
-      env: { ...process.env, QWB50_TEST_UNSAFE_INPUT: "1", QWBE_USER: "admin", QWBE_PASSWORD: "admin", QWBE_URL: base, QWB50_LEDGER_FLUSH: "1" },
+      env: { ...process.env, QWB50_TEST_UNSAFE_INPUT: "1", QWBE_USER: "admin", QWBE_PASSWORD: "admin", QWBE_URL: base, QWBE_DATABASE_URL: dbUrl },
       stdio: "ignore",
     })
-    // kill as soon as at least two rows have landed
+    // kill as soon as at least two rows have landed -- the rest of the run never happened
     for (let i = 0; i < 150 && child.exitCode === null; i++) {
       const n = await qwbeCount("organizations")
       if (n >= before + 2) break
@@ -337,17 +390,50 @@ describe("import chain end-to-end (synthetic fixture, throwaway kernel)", { skip
     child.kill("SIGKILL")
     await new Promise((r) => (child.exitCode !== null ? r() : child.once("exit", r)))
 
-    // rerun to completion: the ledger keeps every pair, so the cube ends with exactly 8.
-    // One duplicate is tolerated: a row whose POST completed but was killed between the
-    // response and the ledger save cannot be distinguished from a never-imported row
-    // (the cubes have no read-by-external-key endpoint). The flush keeps that window tiny.
+    // rerun to completion: the externalId lookup (the generic list's filter, ticket 06)
+    // PATCHes what landed and POSTs the rest. No ledger decides insert versus update, and
+    // no ledger file exists to lose -- the correspondence lives on the rows.
     const again = run("vtiger-map.mjs", [file, join(here, "../mappings/accounts.json")], { QWBE_URL: base })
-    const finalCount = await qwbeCount("organizations")
-    assert.ok(finalCount >= before + 8 && finalCount <= before + 9, `expected 8-9 rows, got ${finalCount - before}`)
-    const ledger = JSON.parse(readFileSync(join(work, "accounts-idmap.json"), "utf8"))
-    const killKeys = Object.keys(ledger).filter((k) => k >= "950001" && k <= "950008")
-    assert.equal(killKeys.length, 8)
     assert.match(again, /errors:\s+0/)
+    assert.ok(!existsSync(join(work, "accounts-idmap.json")), "the id map registry must be gone")
+
+    // THE PROOF: row count == distinct external identities, in the DATABASE.
+    const tally = await dbQuery(
+      `SELECT COUNT(*)::int AS n, COUNT(DISTINCT body->>'externalId')::int AS d
+       FROM "crm--organizations"."organizations" WHERE deleted = false`,
+    )
+    assert.equal(tally.rows[0].n, tally.rows[0].d, `rows ${tally.rows[0].n} != distinct external ids ${tally.rows[0].d}`)
+    const killed = await dbQuery(
+      `SELECT COUNT(*)::int AS n FROM "crm--organizations"."organizations"
+       WHERE deleted = false AND body->>'externalId' LIKE 'vtiger:9500%'`,
+    )
+    assert.equal(killed.rows[0].n, 8)
+    assert.equal(await qwbeCount("organizations"), before + 8)
+  })
+
+  it("the unique index lives in the database and refuses a duplicate external id", async () => {
+    // The index exists, under its deterministic name, partial on live non-null identities.
+    const idx = await dbQuery(
+      `SELECT indexdef FROM pg_indexes WHERE schemaname = 'crm--organizations' AND indexname = 'organizations_external_id_key'`,
+    )
+    assert.equal(idx.rows.length, 1)
+    assert.match(idx.rows[0].indexdef, /CREATE UNIQUE INDEX organizations_external_id_key/)
+    assert.match(idx.rows[0].indexdef, /'externalId'/)
+    // And it is the DATABASE that refuses a duplicate -- not the import tool's lookup.
+    const c = new pg.Client({ connectionString: dbUrl })
+    await c.connect()
+    try {
+      await c.query(
+        `INSERT INTO "crm--organizations"."organizations" (id, type, created_at, deleted, version, body)
+         VALUES ('org_dup_probe', 'Organization', now(), false, 1, $1)`,
+        [JSON.stringify({ name: "Duplicate Probe", externalId: "vtiger:950001" })],
+      )
+      assert.fail("the unique index did not refuse a duplicate external id")
+    } catch (e) {
+      assert.equal(e.code, "23505")
+    } finally {
+      await c.end()
+    }
   })
 
   it("respects a forced small chunk cap: boundaries on line edges, oversize lines refused", async () => {

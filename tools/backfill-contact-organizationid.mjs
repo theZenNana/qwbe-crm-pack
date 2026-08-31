@@ -1,17 +1,24 @@
 #!/usr/bin/env node
-// One-shot backfill for contact rows written before QWB-47 (QWB-54, ticket 07).
+// One-shot backfill for rows written before a schema key existed (QWB-54, tickets 07, 12, 13).
 //
-// Why: contacts stored before the organizations cube existed have NO relation key at all,
-// while the Contact schema wants the key present and nullable. The kernel's generic list
-// serves rows exactly as stored, so such a row would fail response encoding. The cube used to
-// hide this by normalizing every response (`organizationId: c.organizationId ?? null`) -- a
-// hand-written handler is exactly what ticket 07 removes -- so instead the absence is fixed
-// once, in the data: organizationId becomes NULL where the key is missing. The key's name is
-// organizationId since the one-name rename (QWB-54, ticket 12).
+// Why: the kernel's generic list serves rows exactly as stored, and a row missing a key the
+// schema declares (present, nullable) fails response encoding. The cube used to hide this by
+// normalizing every response -- a hand-written handler is exactly what ticket 07 removes --
+// so instead the absence is fixed once, in the data.
 //
-// Idempotent: `body ? 'organizationId'` is true iff the key exists (null included), so rows
-// that carry the key are never touched and a second run changes nothing. Safe against a live
-// store: one UPDATE, matched only on rows that lack the key.
+// Two keys today:
+//   - `organizationId` on contacts: rows stored before the organizations cube existed (the
+//     key's name is organizationId since the one-name rename, ticket 12).
+//   - `externalId` on contacts and organizations: the external identity of the vtiger import
+//     (QWB-54, ticket 13). Rows created by hand have no source system; they gain the key
+//     with a null value, and the partial unique index ignores nulls.
+//
+// Idempotent: `body ? 'key'` is true iff the key exists (null included), so rows that carry
+// the key are never touched and a second run changes nothing. Safe against a live store: one
+// UPDATE per (schema, table, key), matched only on rows that lack the key.
+//
+// Targets, all three: crm--contacts.contacts (organizationId, externalId) and
+// crm--organizations.organizations (externalId).
 //
 // Connection (same contract as the qwbe probes, no password default):
 //   QWBE_DATABASE_URL=postgres://... node tools/backfill-contact-organizationid.mjs
@@ -21,19 +28,26 @@
 
 import pg from "pg"
 
-// schemaName("crm/contacts") -- qwbe core/src/pg/setup.ts turns the cube's slash into "--".
-export const SCHEMA = "crm--contacts"
-export const TABLE = "contacts"
+/** The one statement, for any schema/table/key (tests use a scratch pair). */
+export const fillKeySql = (schema, table, key) =>
+  `UPDATE "${schema}"."${table}" SET body = body || '${JSON.stringify({ [key]: null })}'::jsonb WHERE NOT body ? '${key}'`
 
-/** The one statement, for any schema/table (tests use a scratch pair). */
-export const backfillSql = (schema = SCHEMA, table = TABLE) =>
-  `UPDATE "${schema}"."${table}" SET body = body || '{"organizationId": null}'::jsonb WHERE NOT body ? 'organizationId'`
-
-/** Runs the backfill and returns how many rows gained the key. */
-export const backfillOrganizationId = async (pool, schema = SCHEMA, table = TABLE) => {
-  const result = await pool.query(backfillSql(schema, table))
+/** Runs one backfill and returns how many rows gained the key. */
+export const backfillMissingKey = async (pool, schema, table, key) => {
+  const result = await pool.query(fillKeySql(schema, table, key))
   return result.rowCount ?? 0
 }
+
+export const backfillOrganizationId = (pool, schema = "crm--contacts", table = "contacts") =>
+  backfillMissingKey(pool, schema, table, "organizationId")
+
+export const backfillExternalId = (pool, schema, table) => backfillMissingKey(pool, schema, table, "externalId")
+
+const TARGETS = [
+  { schema: "crm--contacts", table: "contacts", key: "organizationId" },
+  { schema: "crm--contacts", table: "contacts", key: "externalId" },
+  { schema: "crm--organizations", table: "organizations", key: "externalId" },
+]
 
 const connectionUrl = () => {
   if (process.env.QWBE_DATABASE_URL) return process.env.QWBE_DATABASE_URL
@@ -57,8 +71,10 @@ if (isMain) {
   }
   const pool = new pg.Pool({ connectionString: url, max: 1 })
   try {
-    const n = await backfillOrganizationId(pool)
-    console.log(`backfill done: ${n} contact row(s) gained organizationId = null`)
+    for (const t of TARGETS) {
+      const n = await backfillMissingKey(pool, t.schema, t.table, t.key)
+      console.log(`backfill done: ${n} ${t.table} row(s) gained ${t.key} = null`)
+    }
   } finally {
     await pool.end()
   }

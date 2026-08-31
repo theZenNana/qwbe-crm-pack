@@ -60,14 +60,19 @@ describe("contacts cube contract", () => {
     assert.deepEqual(cube.manifest.publishes, ["crm/contacts.created"])
   })
 
-  it("declares the organizationId relation as metadata, and nothing more (QWB-47, ticket 12)", () => {
+  it("declares the organizationId relation and the externalId filter (QWB-47, tickets 12, 13)", () => {
     // The one truth of the contact-to-organization relation is organizationId; the manifest
     // DECLARES its target so the metadata endpoint can resolve ids to names. A declared
     // target is metadata, not an import: no code couples the cubes, there is still no
     // related-list endpoint, no copied field. The filter on the list is the derived contact
     // list of an organization. The target's cube name IS the declared relation target, so
     // the word "organizations" appears here by declaration only.
+    // Ticket 13 adds exactly one more list declaration: externalId, the identity the import
+    // looks a contact up by before it creates one (uniqueness lives in the DATABASE --
+    // tools/ensure-external-id-index.mjs; the cube's role cannot create indexes).
     assert.deepEqual(cube.manifest.relations, { organizationId: { target: "crm/organizations" } })
+    assert.deepEqual(cube.manifest.searchable, ["externalId"])
+    assert.equal(cube.manifest.version, "1.2.0")
     const source = JSON.stringify(cube.manifest)
     for (const word of ["companyId", "erp", "contactIds"]) {
       assert.ok(!source.includes(word), word)

@@ -82,15 +82,19 @@ const summary = (o: OrganizationRow): SummaryRow => ({
 const manifest = {
   name: "organizations",
   // Opts the cube into the metadata drift gate (qwbe src/metadata/schema-drift.ts):
-  // an undeclared version means a schema change cannot be caught (QWB-54). The rename made
-  // this a first-seen cube name, so the starting version is 1.0.0 again (QWB-54, ticket 20).
-  version: "1.0.0",
+  // an undeclared version means a schema change cannot be caught (QWB-54). Bumped 1.0.0 ->
+  // 1.1.0 for the externalId field (QWB-54, ticket 13): a schema change with the version
+  // held still would refuse to boot at mount.
+  version: "1.1.0",
   parent: "crm",
   tables: [TABLE],
   entity: ENTITY,
   sortable: ["name", "industry", "createdAt"],
-  // What relational.search actually serves to the links route: exact match on these.
-  searchable: ["name", "industry"],
+  // What relational.search actually serves to the links route: exact match on these. The
+  // SAME list is what the kernel's generic list accepts as `<field>=` filters (QWB-54,
+  // ticket 06); `externalId` is declared for the import's lookup (QWB-54, ticket 13): the
+  // map tool finds a row by its external identity before it creates one.
+  searchable: ["name", "industry", "externalId"],
   requiresAuth: true,
   permissions: [
     { name: "crm/organizations:read", roles: ["admin", "reader"] },

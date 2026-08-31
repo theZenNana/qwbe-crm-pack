@@ -1,4 +1,5 @@
-// Test for the one-shot organizationId backfill (QWB-54, ticket 07; renamed ticket 12).
+// Test for the one-shot backfill of schema keys older rows lack (QWB-54, tickets 07, 13;
+// the key's name is organizationId since the ticket-12 rename).
 //
 // What is proven, against a throwaway database (same recipe as import.test.mjs: the
 // password comes from QWBE_PG_PASSWORD, never a default):
@@ -11,7 +12,7 @@
 import assert from "node:assert/strict"
 import { after, before, describe, it } from "node:test"
 import pg from "pg"
-import { backfillOrganizationId } from "./backfill-contact-organizationid.mjs"
+import { backfillExternalId, backfillOrganizationId } from "./backfill-contact-organizationid.mjs"
 
 const url = () => {
   if (!process.env.QWBE_PG_PASSWORD) throw new Error("set QWBE_PG_PASSWORD in the environment (no password default)")
@@ -47,12 +48,14 @@ before(async () => {
        body jsonb NOT NULL
      )`,
   )
-  // One row from before QWB-47 (no key), one with null, one linked.
+  // Rows from before the keys existed (no organizationId, no externalId), rows with the
+  // key null, one linked, and one that already carries its external identity.
   await pool.query(
     `INSERT INTO "${SCHEMA}"."${TABLE}" (id, type, body) VALUES
        ('old', 'Contact', '{"id":"old","type":"Contact","name":"Old Row"}'),
        ('null', 'Contact', '{"id":"null","type":"Contact","name":"Null Row","organizationId":null}'),
-       ('linked', 'Contact', '{"id":"linked","type":"Contact","name":"Linked Row","organizationId":"org_1"}')`,
+       ('linked', 'Contact', '{"id":"linked","type":"Contact","name":"Linked Row","organizationId":"org_1"}'),
+       ('ext', 'Contact', '{"id":"ext","type":"Contact","name":"External Row","externalId":"vtiger:55"}')`,
   )
 })
 
@@ -70,7 +73,7 @@ const bodyOf = async (id) => {
 describe("the one-shot organizationId backfill", () => {
   it("fills the key with null only where it is missing", async () => {
     const n = await backfillOrganizationId(pool, SCHEMA, TABLE)
-    assert.equal(n, 1)
+    assert.equal(n, 2) // old and ext lacked the key
     assert.deepEqual(await bodyOf("old"), { id: "old", type: "Contact", name: "Old Row", organizationId: null })
     assert.deepEqual(await bodyOf("null"), { id: "null", type: "Contact", name: "Null Row", organizationId: null })
     assert.deepEqual(await bodyOf("linked"), { id: "linked", type: "Contact", name: "Linked Row", organizationId: "org_1" })
@@ -81,5 +84,19 @@ describe("the one-shot organizationId backfill", () => {
     assert.equal(n, 0)
     assert.equal((await bodyOf("old")).organizationId, null)
     assert.equal((await bodyOf("linked")).organizationId, "org_1")
+  })
+})
+
+describe("the one-shot externalId backfill (QWB-54, ticket 13)", () => {
+  it("gives every row the key, null where no source system put one there", async () => {
+    const n = await backfillExternalId(pool, SCHEMA, TABLE)
+    assert.equal(n, 3) // old, null, linked lacked the key; 'ext' already carries one
+    assert.equal((await bodyOf("old")).externalId, null)
+    assert.equal((await bodyOf("ext")).externalId, "vtiger:55")
+  })
+
+  it("is idempotent: a second run reports zero and changes nothing", async () => {
+    assert.equal(await backfillExternalId(pool, SCHEMA, TABLE), 0)
+    assert.equal((await bodyOf("ext")).externalId, "vtiger:55")
   })
 })

@@ -46,5 +46,14 @@ describe("CRM source package boundary", () => {
     // no predecessor, honestly — the invented migration from a never-existing cube is gone.
     assert.equal(organizations.manifest.dataMigration, undefined)
     assert.deepEqual(organizations.manifest.tables, ["organizations"])
+    // QWB-54, ticket 13: the importable cubes carry externalId, published as a list filter
+    // (that filter IS the import's lookup); uniqueness lives in the DATABASE, guarded by the
+    // partial unique index tools/ensure-external-id-index.mjs ensures. contracts is not
+    // importable (no mapping, no import writes it), so it declares no external identity.
+    assert.equal(organizations.manifest.version, "1.1.0")
+    assert.deepEqual(organizations.manifest.searchable, ["name", "industry", "externalId"])
+    assert.equal(contacts.manifest.version, "1.2.0")
+    assert.deepEqual(contacts.manifest.searchable, ["externalId"])
+    assert.equal(contracts.manifest.searchable, undefined)
   })
 })

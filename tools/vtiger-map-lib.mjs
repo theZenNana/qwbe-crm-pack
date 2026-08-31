@@ -1,10 +1,12 @@
-// Pure mapping for QWB-50: an exported vtiger row + a mapping file -> the payload for the
-// qwbe cube API. No I/O, so the tests can run it on synthetic fixtures.
+// Pure mapping for QWB-50, external identity added by QWB-54 ticket 13: an exported vtiger
+// row + a mapping file -> the payload for the qwbe cube API. No I/O, so the tests can run it
+// on synthetic fixtures.
 //
-// Idempotency rule: the vtiger id (the mapping's `key` column, e.g. vtigerId) is the
-// external key. It rides on every staged row and decides insert versus update in the map
-// tool; the vtigerId -> qwbeId correspondence is kept in a ledger file next to the export
-// (outside git), because the cube schemas are fixed and carry no externalId field.
+// Idempotency rule: the vtiger id (the mapping's `key` column, e.g. vtigerId) is the external
+// key. It becomes the row's OWN identity -- `externalId: "vtiger:<crmid>"` -- stored in the
+// cube and guarded by a UNIQUE index in the database (tools/ensure-external-id-index.mjs).
+// The map tool looks each row up through the generic list's `?externalId=` filter and POSTs
+// only when it is missing; there is no ledger file left to lose or reconcile.
 
 const emptyToNull = (v) => (v === undefined || v === null || String(v).trim() === "" ? null : v)
 const truthy = (v) => v === true || v === 1 || v === "1" || v === "on" || v === "true"
@@ -49,4 +51,12 @@ export const mapRow = (row, mapping) => {
 export const rowKey = (row, mapping) => {
   const v = row[mapping.key]
   return v === undefined || v === null ? null : String(v)
+}
+
+/** The external identity a row is stored under: "vtiger:<crmid>". One name for the source
+ *  system and the source row, stable across runs -- this is what the unique index guards and
+ *  what the rerun looks up. Null when the row has no external key at all. */
+export const externalKey = (row, mapping) => {
+  const key = rowKey(row, mapping)
+  return key === null ? null : `vtiger:${key}`
 }

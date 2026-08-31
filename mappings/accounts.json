@@ -1,7 +1,9 @@
 {
   "entity": "accounts",
   "route": "/organizations",
-  "comment": "Proposed default mapping (QWB-50; cube renamed QWB-54 ticket 12): the fields the crm/organizations cube actually has. The owner signs off after reading the staging profile; cf_* columns and the fields listed under dropped stay out unless the profile says otherwise.",
+  "cube": "crm/organizations",
+  "table": "organizations",
+  "comment": "Proposed default mapping (QWB-50; cube renamed QWB-54 ticket 12): the fields the crm/organizations cube actually has. The owner signs off after reading the staging profile; cf_* columns and the fields listed under dropped stay out unless the profile says otherwise. cube/table name the database home of the unique externalId index (QWB-54, ticket 13).",
   "key": "vtigerId",
   "map": {
     "accountname": "name",

@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "QWBE_REPO=\"${QWBE_REPO:-$PWD/../../qwbe}\" node --test source-contract.test.mjs cubes/crm/contacts/index.test.ts cubes/crm/contracts/index.test.ts cubes/crm/organizations/index.test.ts tools/import.test.mjs tools/backfill-contact-organizationid.test.mjs",
+    "test": "QWBE_REPO=\"${QWBE_REPO:-$PWD/../../qwbe}\" node --test source-contract.test.mjs cubes/crm/contacts/index.test.ts cubes/crm/contracts/index.test.ts cubes/crm/organizations/index.test.ts tools/import.test.mjs tools/ensure-external-id-index.test.mjs tools/backfill-contact-organizationid.test.mjs",
     "lint": "eslint .",
     "test:source": "node --test source-contract.test.mjs",
     "typecheck": "tsc --noEmit"

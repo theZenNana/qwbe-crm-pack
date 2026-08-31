@@ -17,6 +17,13 @@ export const Organization = Schema.Struct({
   ...EntityMeta,
   /** The one required field, and the summary title. */
   name: Schema.NonEmptyTrimmedString,
+  /** The external identity of a row that came from (or is destined for) a source system:
+   *  "vtiger:<crmid>" for the import (QWB-54, ticket 13). Null for rows created by hand.
+   *  Uniqueness lives in the DATABASE: a partial unique index on this field (only live rows,
+   *  only non-null values) is ensured by tools/ensure-external-id-index.mjs -- a plugin cube
+   *  cannot create it (the kernel's per-cube role holds DML only), so the pack's tool does,
+   *  as the database user that owns the tables. */
+  externalId: Schema.NullOr(Schema.String),
   /** The human-facing number; the source column is named in the vtiger import mapping. */
   organizationNo: Schema.NullOr(Schema.String),
   phone: Schema.NullOr(Schema.String),
@@ -41,6 +48,7 @@ export const Organization = Schema.Struct({
 
 export const OrganizationCreate = Schema.Struct({
   name: Schema.NonEmptyTrimmedString,
+  externalId: Schema.optionalWith(Schema.NullOr(Schema.String), { default: () => null }),
   organizationNo: Schema.optionalWith(Schema.NullOr(Schema.String), { default: () => null }),
   phone: Schema.optionalWith(Schema.NullOr(Schema.String), { default: () => null }),
   email: Schema.optionalWith(Schema.NullOr(Schema.String), { default: () => null }),
@@ -66,6 +74,7 @@ export type OrganizationRow = typeof Organization.Type
 
 export const OrganizationPatch = Schema.Struct({
   name: Schema.optional(Schema.NonEmptyTrimmedString),
+  externalId: Schema.optional(Schema.NullOr(Schema.String)),
   organizationNo: Schema.optional(Schema.NullOr(Schema.String)),
   phone: Schema.optional(Schema.NullOr(Schema.String)),
   email: Schema.optional(Schema.NullOr(Schema.String)),
