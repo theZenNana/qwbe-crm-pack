@@ -98,7 +98,38 @@ if (process.platform !== "linux") fail("this suite drives the Orca desktop app a
 rmSync(CONFIG.workDir, { recursive: true, force: true })
 rmSync(CONFIG.dataDir, { recursive: true, force: true })
 mkdirSync(CONFIG.workDir, { recursive: true })
-execSync(`git -C ${CONFIG.qwbeRepo} archive origin/main | tar -x -C ${CONFIG.workDir}`)
+// WHICH kernel this run is built from.
+//
+// This line said `origin/main`, hardcoded, so every run of this suite tested the
+// merged kernel and never the branch being written -- the generic list handler
+// the filter scenarios walk was on the branch, and no scenario ever reached it.
+// A suite that silently tests something other than what you changed is worse
+// than no suite. HEAD of whatever the kernel repository has checked out is what
+// "run the suite" means; QWBE_E2E_KERNEL_REF pins another ref for the case where
+// a release check really does want origin/main.
+//
+// `git archive` carries COMMITTED content only, by design: this stays a copy
+// addressable by a hash, not a copy of someone's desk. An uncommitted kernel
+// change is therefore NOT in the run -- which is exactly the "I fixed it and the
+// suite still fails" trap, so a dirty tree is printed as a warning instead of
+// being swallowed.
+const gitIn = (dir, args) => execSync(`git -C ${dir} ${args}`, { encoding: "utf8" }).trim()
+const dirtyCount = (dir) => gitIn(dir, "status --porcelain").split("\n").filter(Boolean).length
+const kernelRef = process.env.QWBE_E2E_KERNEL_REF ?? "HEAD"
+let kernelSha = ""
+let kernelName = ""
+try {
+  kernelSha = gitIn(CONFIG.qwbeRepo, `rev-parse --short ${kernelRef}`)
+  kernelName = gitIn(CONFIG.qwbeRepo, `rev-parse --abbrev-ref ${kernelRef}`)
+} catch {
+  fail(`QWBE_E2E_KERNEL_REF=${kernelRef} does not resolve in ${CONFIG.qwbeRepo}`)
+}
+log(`== kernel: ${kernelRef} -> ${kernelName} ${kernelSha} (${CONFIG.qwbeRepo}) ==`)
+const kernelDirty = dirtyCount(CONFIG.qwbeRepo)
+if (kernelDirty !== 0) {
+  log(`   WARNING: ${kernelDirty} uncommitted change(s) in the kernel tree are NOT in this run (git archive takes committed content only)`)
+}
+execSync(`git -C ${CONFIG.qwbeRepo} archive ${kernelRef} | tar -x -C ${CONFIG.workDir}`)
 // Install the crm-pack cubes the way probes/crm.mjs does: copy the plugin under
 // core/plugins/crm-pack. The plugin's node_modules contains a relative qwbe-core symlink
 // that pointed at the source checkout; repoint it at THIS copy.
@@ -136,6 +167,30 @@ for (const packDir of ["crm-pack", "customfields-pack"]) {
 // records nothing, and the per-machine records in QWBE_DATA_DIR still catch
 // drift between runs. The staleness itself is reported, not hidden (QWB-52
 // review 19: the path must exist, not merely be named).
+// The two packs above came from their WORKING TREES (cpSync), not from a git ref:
+// they are the code under test, uncommitted edits included. So a run is a third
+// thing -- a committed kernel plus whatever the pack directories hold right now
+// -- and the log says so, instead of letting the kernel's hash imply that both
+// sides are pinned.
+const packState = (dir) => {
+  try {
+    const n = dirtyCount(dir)
+    const head = gitIn(dir, "rev-parse --short HEAD")
+    return n === 0 ? head : `${head} +${n} uncommitted`
+  } catch {
+    return "not a git checkout"
+  }
+}
+const packLine =
+  "packs from the working tree (uncommitted edits INCLUDED): " +
+  `crm-pack ${packState(CONFIG.crmPack)}, customfields-pack ${packState(CONFIG.customFieldsPack)}`
+log(`== ${packLine} ==`)
+// The written ledger carries the same line: a saved result cannot claim a
+// revision it did not run.
+const revisionLine =
+  `Kernel: ${kernelRef} -> ${kernelName} ${kernelSha}` +
+  (kernelDirty === 0 ? "" : ` (${kernelDirty} uncommitted kernel change(s) NOT included)`) +
+  `. ${packLine.charAt(0).toUpperCase()}${packLine.slice(1)}.`
 writeFileSync(join(CONFIG.workDir, "empty-cube-versions.json"), "{}\n")
 log("== install dependencies (qwbe core) ==")
 // npm run propagates npm_config_* (including the global allow-scripts policy) into this
@@ -274,6 +329,7 @@ try {
   rmSync(CONFIG.workDir, { recursive: true, force: true })
 
   const results = writeResults([
+    revisionLine,
     `Stack: qwbe :${qwbePort}, frontend :${fePort} (both proven up before the browser steps).`,
     loginError ? `Login through the qwbe API failed: ${loginError}` : "",
     scenarioError ? `Runner error after scenarios started: ${scenarioError.message}` : "",
