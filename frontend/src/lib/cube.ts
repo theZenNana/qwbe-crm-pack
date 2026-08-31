@@ -78,8 +78,10 @@ export function canDefineFields(permissions: ReadonlyArray<string>): boolean {
 
 // The query-string keys qwbe's list contract owns. A cube field with one of
 // these names must never be sent as a bare filter key, or it would override
-// paging.
-const RESERVED_QUERY_KEYS = new Set(["offset", "limit", "sortBy", "descending"])
+// paging. `q` and `ids` are reserved for the same reason: qwbe's list contract
+// reads them itself (q scans the searchable fields, ids fetches a batch), so a
+// field of one of those names must not arrive as a bare filter key either.
+const RESERVED_QUERY_KEYS = new Set(["offset", "limit", "sortBy", "descending", "q", "ids"])
 
 export type ListParams = {
   offset?: number
@@ -300,19 +302,35 @@ export function clearRelationMetaCache(): void {
   metaCache.clear()
 }
 
+// Fetches (and session-caches) a cube's published metadata, or null when the
+// request fails. Shared by every relation surface: batch cell resolution and
+// the typeahead both need the title field, and each cube's metadata is fetched
+// at most once per session.
+export async function relationMeta(
+  target: string,
+  doFetch: typeof fetch = apiFetch,
+): Promise<CubeMetadata | null> {
+  const hit = metaCache.get(target)
+  if (hit) return hit
+  try {
+    const r = await doFetch(metadataApiPath(target))
+    if (!r.ok) return null
+    const meta = (await r.json()) as CubeMetadata
+    metaCache.set(target, meta)
+    return meta
+  } catch {
+    return null
+  }
+}
+
 export async function resolveRelationTitle(
   target: string,
   id: string,
   doFetch: typeof fetch = apiFetch,
 ): Promise<string> {
   try {
-    let meta = metaCache.get(target)
-    if (!meta) {
-      const r = await doFetch(metadataApiPath(target))
-      if (!r.ok) return id
-      meta = (await r.json()) as CubeMetadata
-      metaCache.set(target, meta)
-    }
+    const meta = await relationMeta(target, doFetch)
+    if (!meta) return id
     const r = await doFetch(cubeApiPath(target, `/${id}`))
     if (!r.ok) return id
     const row = (await r.json()) as Row

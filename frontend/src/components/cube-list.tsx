@@ -6,9 +6,11 @@
 // server-side proxy, and renders columns from the published fields: label from
 // `label`, cell shape from `type` and `enum`, sortable headers only where
 // `sortable` is true, and a filter control for every field the metadata marks
-// `searchable` (a relation field becomes a select, a plain field a text input).
-// Paging and sorting are server-side end to end: the page, page size and sort
-// parameters travel to qwbe; nothing here slices a full result set.
+// `searchable` (a relation field becomes a typeahead search, a plain field a
+// text input). Paging and sorting are server-side end to end: the page, page
+// size and sort parameters travel to qwbe; nothing here slices a full result
+// set. Relation cells resolve in ONE batch request per target cube
+// (QWB-54, ticket 11), not one request per cell.
 
 import Link from "next/link"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
@@ -31,11 +33,13 @@ import {
   metadataApiPath,
   pageWindow,
   clearRelationMetaCache,
-  resolveRelationTitle,
   saveCell,
   sortRequestFor,
-  titleOf,
 } from "@/lib/cube"
+import { relationRefsOf } from "@/lib/relation-batch"
+import { useRelationTitles } from "@/hooks/use-relation-titles"
+import { RelationCell, RelationLink } from "@/components/relation-cell"
+import { RelationTypeahead } from "@/components/relation-typeahead"
 import { Button } from "@/components/ui/button"
 import { CustomFieldsPanel } from "@/components/custom-fields-panel"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -165,10 +169,26 @@ export function CubeList({
 
   useEffect(() => load(), [load])
 
+  // Columns are pure derivation from the metadata; they live above the early
+  // returns because the relation batch below needs them.
+  const columns = useMemo(
+    () => (meta ? columnsFromFields(meta.fields).filter((c) => c.visible) : []),
+    [meta],
+  )
+  // Every relation value on the current page, deduplicated. One ids batch per
+  // distinct target cube resolves them all (useRelationTitles); the old list
+  // fetched each cell's row separately -- 25 round-trips on a 25-row page.
+  // metaVersion is the bust: a definition change may republish the target's
+  // metadata (its title field), so titles are re-resolved once.
+  const relationRefs = useMemo(
+    () => (page ? relationRefsOf(page.rows, columns.map((c) => c.field)) : []),
+    [page, columns],
+  )
+  const resolveTitle = useRelationTitles(relationRefs, metaVersion)
+
   if (metaError) return <p role="alert">metadata unavailable: {metaError}</p>
   if (!meta) return <Skeleton className="h-64 w-full" />
 
-  const columns = columnsFromFields(meta.fields).filter((c) => c.visible)
   // The title field is the row's human identity (the same field titleOf uses
   // on the detail page). When this app has a route for the cube, the title
   // cell links to the row's detail page; the other cells stay inline-editable.
@@ -252,9 +272,8 @@ export function CubeList({
         .filter((f) => !fixedFilters?.[f.name])
         .map((f) =>
           f.relation ? (
-            <RelationSearch
+            <RelationTypeahead
               key={f.name}
-              meta={meta}
               field={f}
               value={search[f.name] ?? ""}
               onChange={(v) => {
@@ -321,6 +340,7 @@ export function CubeList({
                     setEdit={setEdit}
                     error={cellErrors[`${String(row.id)}:${column.field.name}`]}
                     interactive={hydrated}
+                    resolveTitle={resolveTitle}
                     onSave={(value) => saveEdit(row, column.field, value)}
                   />
                 </TableCell>
@@ -447,64 +467,8 @@ function TextSearch({
 }
 
 // A searchable relation field: the caller picks one row of the target cube.
-// The options are the first page of the target (200 is qwbe's MAX_LIMIT); when
-// the target holds more, the select says so instead of pretending to be whole.
-function RelationSearch({
-  meta,
-  field,
-  value,
-  onChange,
-}: {
-  meta: CubeMetadata
-  field: FieldMetadata
-  value: string
-  onChange: (value: string) => void
-}) {
-  const [targetMeta, setTargetMeta] = useState<CubeMetadata | null>(null)
-  const [options, setOptions] = useState<Row[] | null>(null)
-  const [truncated, setTruncated] = useState(false)
-  const target = field.relation!.target
-
-  useEffect(() => {
-    let alive = true
-    Promise.all([
-      apiFetch(metadataApiPath(target))
-        .then(async (r) => (r.ok ? ((await r.json()) as CubeMetadata) : null))
-        .catch(() => null),
-      apiFetch(listApiPath(target, { offset: 0, limit: 200 }))
-        .then(async (r) => (r.ok ? ((await r.json()) as PageOf<Row>) : null))
-        .catch(() => null),
-    ]).then(([m, p]) => {
-      if (!alive) return
-      setTargetMeta(m)
-      setOptions(p?.rows ?? [])
-      setTruncated(p !== null && p.rows.length >= 200 && (p.total === undefined || p.total > p.rows.length))
-    })
-    return () => {
-      alive = false
-    }
-  }, [target])
-
-  return (
-    <div className="flex items-center gap-2">
-      <span className="text-sm text-muted-foreground">{field.label}</span>
-      <Select value={value || "all"} onValueChange={(v) => onChange(v === "all" ? "" : v)}>
-        <SelectTrigger className="w-64" aria-label={field.label}>
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="all">All {meta.entity ?? "rows"}</SelectItem>
-          {(options ?? []).map((row) => (
-            <SelectItem key={String(row.id)} value={String(row.id)}>
-              {targetMeta ? titleOf(targetMeta, row) : String(row.id)}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      {truncated && <span className="text-xs text-muted-foreground">first 200 shown</span>}
-    </div>
-  )
-}
+// The picker is the typeahead (relation-typeahead.tsx): one search request
+// per typing pause, not a dropdown of the target's first 200 rows.
 
 function Cell({
   row,
@@ -515,6 +479,7 @@ function Cell({
   setEdit,
   error,
   interactive,
+  resolveTitle,
   onSave,
 }: {
   row: Row
@@ -525,6 +490,7 @@ function Cell({
   setEdit: (edit: EditState | null) => void
   error?: string
   interactive: boolean
+  resolveTitle: (target: string, id: string) => string | null
   onSave: (value: string) => void
 }) {
   const field = column.field
@@ -586,7 +552,9 @@ function Cell({
 
   let content: React.ReactNode
   if (field.relation && value !== null && value !== undefined) {
-    content = <RelationValue target={field.relation.target} id={String(value)} />
+    // The title comes from the page's batch cache; the raw id shows while it
+    // is in flight (or if the row vanished before the batch landed).
+    content = <RelationCell target={field.relation.target} id={String(value)} resolve={resolveTitle} />
   } else if (field.type === "boolean" && !boolAbsent) {
     content = value ? "yes" : "no"
   } else {
@@ -653,13 +621,13 @@ function Cell({
           />
         )}
         </div>
-      ) : field.relation && hrefForRelation(field.relation.target, String(value ?? "")) ? (
-        <Link
-          className="underline"
-          href={hrefForRelation(field.relation.target, String(value))!}
-        >
+      ) : field.relation &&
+        value !== null &&
+        value !== undefined &&
+        hrefForRelation(field.relation.target, String(value)) ? (
+        <RelationLink target={field.relation.target} id={String(value)}>
           {content}
-        </Link>
+        </RelationLink>
       ) : isTitle && rowLink ? (
         <Link className="underline" href={rowLink}>
           {content}
@@ -697,21 +665,4 @@ function Cell({
       )}
     </div>
   )
-}
-
-// A relation cell shows the target row's title, resolved through the target
-// cube's own metadata and row endpoint, falling back to the raw id. The link,
-// when this app has a route for the target, wraps the resolved title.
-function RelationValue({ target, id }: { target: string; id: string }) {
-  const [title, setTitle] = useState<string | null>(null)
-  useEffect(() => {
-    let alive = true
-    resolveRelationTitle(target, id).then((t) => {
-      if (alive) setTitle(t)
-    })
-    return () => {
-      alive = false
-    }
-  }, [target, id])
-  return <>{title ?? id}</>
 }
