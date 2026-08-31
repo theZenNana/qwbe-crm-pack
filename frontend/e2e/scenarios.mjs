@@ -81,6 +81,32 @@ async function waitSignInEnabled(timeout = 15_000) {
   }
 }
 
+/**
+ * Click a freshly found ref, retrying with a NEW snapshot when Orca reports
+ * the ref stale: a React re-render between the snapshot and the click can
+ * replace the node the ref pointed at. The retry is on the FINDER, not on
+ * the same ref — a stale ref is re-resolved, never re-clicked blindly.
+ * Returns the ref that was clicked, or null when nothing matched.
+ */
+async function clickStable(pred, name) {
+  for (let i = 0; i < 8; i++) {
+    const snap = snapshot()
+    const entry = Object.entries(snap.refs).find(([, v]) => pred(v))
+    if (!entry) {
+      await new Promise((r) => setTimeout(r, 500))
+      continue
+    }
+    const [ref, info] = entry
+    try {
+      click(ref, name ?? info.name)
+      return ref
+    } catch (e) {
+      if (!String(e.message).includes("browser_stale_ref")) throw e
+    }
+  }
+  return null
+}
+
 async function settle(text, timeout = 30_000) {
   const ok = await waitForText(text, timeout)
   if (!ok) throw new Error(`page never showed ${JSON.stringify(text)}`)
@@ -134,24 +160,30 @@ export async function scenarioLogin() {
     return record(name, "RED", "the Sign in submit never became enabled (no hydration)", "01-login-page-RED.png")
   }
   shot("01-login-page")
-  let snap = snapshot()
-  const userRef = refFor(snap.refs, "Username")
-  const passRef = refFor(snap.refs, "Password")
-  if (!userRef || !passRef) {
+  const userRef = await clickStable((v) => v.role === "textbox" && v.name === "Username", "Username")
+  if (!userRef) {
     shot("01-login-page-RED", { full: true })
     return record(name, "RED", "login form fields not found", "01-login-page-RED.png")
   }
-  click(userRef, snap.refs[userRef]?.name)
   type(CONFIG.username)
-  click(passRef, snap.refs[passRef]?.name)
+  await clickStable((v) => v.role === "textbox" && v.name === "Password", "Password")
   type(CONFIG.password)
-  const submit = refFor(snap.refs, (n) => n === "Sign in")
-  click(submit, snap.refs[submit]?.name)
+  await clickStable((v) => v.role === "button" && v.name === "Sign in", "Sign in")
   const landed = await waitForUrl(".*/me.*")
   // Assert the text with Orca's own wait, not with the snapshot string: the snapshot is an
   // accessibility tree that does not always carry a card's description text, so a page that
   // plainly reads "Signed in as admin" was scored RED three runs in a row.
   const textShown = await waitForText("Signed in as", 20_000)
+  if (!landed || !textShown) {
+    const fields = orca(
+      "eval",
+      "--expression",
+      "JSON.stringify([...document.querySelectorAll('input')].map((i) => [i.name || i.id, i.value]))",
+    )
+    console.log(`  login fields after submit: ${fields.result}`)
+    const page = orca("eval", "--expression", "document.body.innerText.slice(0, 300)")
+    console.log(`  login page after submit: ${JSON.stringify(page.result)}`)
+  }
   snap = snapshot()
   shot("01-after-login")
   const identityShown = landed && snap.origin.endsWith("/me") && textShown
@@ -186,10 +218,9 @@ export async function scenarioList() {
     shot("02-sort-RED", { full: true })
     return record(name, "RED", "Name column header not clickable", "02-sort-RED.png")
   }
-  click(header, snap.refs[header]?.name)
+  await clickStable((v) => v.role === "button" && (v.name ?? "").startsWith("Name"))
   await waitForText("Name ↑")
-  const second = sortBtn(snapshot().refs)
-  click(second, snapshot().refs[second]?.name)
+  await clickStable((v) => v.role === "button" && (v.name ?? "").startsWith("Name"))
   await waitForText("Name ↓")
   snap = snapshot()
   shot("02-accounts-sorted-desc")
@@ -200,12 +231,11 @@ export async function scenarioList() {
   }
 
   // Searching: the Name filter narrows the list to Alpha only.
-  const filter = refFor(snapshot().refs, "Filter by Name")
+  const filter = await clickStable((v) => v.role === "textbox" && v.name === "Filter by Name", "Filter by Name")
   if (!filter) {
     shot("02-search-RED", { full: true })
     return record(name, "RED", "Name filter input not found", "02-search-RED.png")
   }
-  click(filter, snapshot().refs[filter]?.name)
   type(ORG_A)
   const narrowed = await waitForText(ORG_A) && (async () => {
     await new Promise((r) => setTimeout(r, 1500))
@@ -247,7 +277,11 @@ export async function scenarioInlineEdit() {
     shot("03-edit-RED", { full: true })
     return record(name, "RED", "no editable City cell button found", "03-edit-RED.png")
   }
-  click(cityBtn, snap.refs[cityBtn]?.name)
+  const clicked = await clickStable((v) => v.role === "button" && /^Edit .*City/i.test(v.name ?? ""))
+  if (!clicked) {
+    shot("03-edit-RED", { full: true })
+    return record(name, "RED", "no editable City cell button found", "03-edit-RED.png")
+  }
   await pause(1500)
   snap = snapshot()
   // The open editor is a textbox labelled with the field's label ("Billing City");
@@ -309,9 +343,7 @@ export async function scenarioNonEditable(api) {
     shot("04-noneditable-RED", { full: true })
     return record(name, "RED", editButton ? `field ${nonEditable.name} renders an edit affordance despite editable=false` : `detail page does not show ${nonEditable.name}`, "04-noneditable-RED.png")
   }
-  const textField = refFor(snap.refs, (n) => n === String(value) || n.includes(nonEditable.label))
-  if (textField) {
-    click(textField, snap.refs[textField]?.name)
+  if (await clickStable((v) => (v.name ?? "") === String(value) || (v.name ?? "").includes(nonEditable.label))) {
     const after = snapshot()
     const openedInput = refFor(after.refs, (n) => n === nonEditable.label)
     shot("04-noneditable-after-click")
@@ -330,12 +362,11 @@ export async function scenarioNavigation(seed) {
   await settle(CONTACT_LINKED)
   let snap = snapshot()
   shot("05-account-detail")
-  const contactLink = refFor(snap.refs, CONTACT_LINKED)
+  const contactLink = await clickStable((v) => v.name === CONTACT_LINKED && v.role !== "heading")
   if (!contactLink) {
     shot("05-nav-RED", { full: true })
     return record(name, "RED", "organization detail does not link to its contact", "05-nav-RED.png")
   }
-  click(contactLink, snap.refs[contactLink]?.name)
   const onContact = await waitForUrl(".*/contacts/.*")
   snap = snapshot()
   shot("05-contact-detail")
@@ -343,12 +374,11 @@ export async function scenarioNavigation(seed) {
     shot("05-nav-RED", { full: true })
     return record(name, "RED", `contact page did not show the organization (${snap.origin})`, "05-nav-RED.png")
   }
-  const backLink = refFor(snap.refs, new RegExp(ORG_A))
+  const backLink = await clickStable((v) => (v.name ?? "").includes(ORG_A) && v.role !== "heading")
   if (!backLink) {
     shot("05-nav-RED", { full: true })
     return record(name, "RED", "contact detail does not link back to the organization", "05-nav-RED.png")
   }
-  click(backLink, snap.refs[backLink]?.name)
   const back = await waitForUrl(new RegExp(`.*/accounts/${seed.orgA.id}.*`))
   snap = snapshot()
   shot("05-back-on-account")
@@ -362,12 +392,11 @@ export async function scenarioLogout() {
   await settle("Log out")
   let snap = snapshot()
   shot("06-me-before-logout")
-  const btn = refFor(snap.refs, "Log out")
+  const btn = await clickStable((v) => v.role === "button" && v.name === "Log out", "Log out")
   if (!btn) {
     shot("06-logout-RED", { full: true })
     return record(name, "RED", "logout button not found on the identity page", "06-logout-RED.png")
   }
-  click(btn, snap.refs[btn]?.name)
   const back = await waitForUrl(".*/login.*")
   snap = snapshot()
   shot("06-after-logout")
@@ -398,12 +427,11 @@ export async function scenarioCustomField() {
   let snap = snapshot()
 
   // 1. open the definitions panel
-  const panelBtn = refFor(snap.refs, (n) => n === "Custom fields")
+  const panelBtn = await clickStable((v) => v.role === "button" && v.name === "Custom fields", "Custom fields")
   if (!panelBtn) {
     shot("07-panel-RED", { full: true })
     return record(name, "RED", "no Custom fields button on the contacts list", "07-panel-RED.png")
   }
-  click(panelBtn, snap.refs[panelBtn]?.name)
   const panelOpen = await waitForText("Fields defined at runtime", 15_000)
   snap = snapshot()
   if (!panelOpen) {
@@ -413,20 +441,18 @@ export async function scenarioCustomField() {
   shot("07-panel-open")
 
   // 2. define a select field
-  const nameBox = Object.entries(snap.refs).find(([, v]) => v.role === "textbox" && v.name === "Name")?.[0]
-  const labelBox = Object.entries(snap.refs).find(([, v]) => v.role === "textbox" && v.name === "Label")?.[0]
-  if (!nameBox || !labelBox) {
+  const nameBox = await clickStable((v) => v.role === "textbox" && v.name === "Name", "Name")
+  if (!nameBox) {
     shot("07-define-RED", { full: true })
     return record(name, "RED", "definition form inputs not found", "07-define-RED.png")
   }
-  click(nameBox, snap.refs[nameBox]?.name)
   keypress("ctrl+a")
   type(CF_NAME)
-  click(labelBox, snap.refs[labelBox]?.name)
+  await clickStable((v) => v.role === "textbox" && v.name === "Label", "Label")
   keypress("ctrl+a")
   type(CF_LABEL)
   // Type select: open the combobox and pick "select".
-  const typeCombo = Object.entries(snap.refs).find(([, v]) => v.role === "combobox" && /type/i.test(v.name ?? ""))?.[0]
+  const typeCombo = await clickStable((v) => v.role === "combobox" && /type/i.test(v.name ?? ""))
   if (!typeCombo) {
     shot("07-define-RED", { full: true })
     return record(name, "RED", "type combobox not found in the definition form", "07-define-RED.png")
@@ -438,24 +464,22 @@ export async function scenarioCustomField() {
     shot("07-define-RED", { full: true })
     return record(name, "RED", "the select option is missing from the type combobox", "07-define-RED.png")
   }
-  click(selectOption, snap.refs[selectOption]?.name)
+  click(selectOption, snapshot().refs[selectOption]?.name)
   await new Promise((r) => setTimeout(r, 500))
   snap = snapshot()
   // The options input appears only for type=select (metadata-driven form).
-  const optionsBox = Object.entries(snap.refs).find(([, v]) => v.role === "textbox" && /Options/.test(v.name ?? ""))?.[0]
-  if (!optionsBox) {
+  const optRef = await clickStable((v) => v.role === "textbox" && /Options/.test(v.name ?? ""))
+  if (!optRef) {
     shot("07-define-RED", { full: true })
     return record(name, "RED", "options input did not appear for type select", "07-define-RED.png")
   }
-  click(optionsBox, snap.refs[optionsBox]?.name)
   type(CF_OPTIONS)
   snap = snapshot()
-  const addBtn = refFor(snap.refs, "Add field")
+  const addBtn = await clickStable((v) => v.role === "button" && v.name === "Add field", "Add field")
   if (!addBtn) {
     shot("07-define-RED", { full: true })
     return record(name, "RED", "Add field button not found", "07-define-RED.png")
   }
-  click(addBtn, snap.refs[addBtn]?.name)
   // The definition appears in the panel list AND the column appears in the
   // table (the metadata is re-read after the definition change).
   const columnShown = await waitForText(CF_LABEL, 15_000)
@@ -470,22 +494,13 @@ export async function scenarioCustomField() {
   // hydration in the app, so wait for the BUTTON (never click plain text)
   // and then click ONCE (QWB-52 review 7).
   let editBtn
-  for (let i = 0; i < 20 && !editBtn; i++) {
-    editBtn = Object.entries(snap.refs).find(
-      ([, v]) => v.role === "button" && v.name === `Edit ${CF_LABEL}`,
-    )?.[0]
-    if (!editBtn) {
-      await new Promise((r) => setTimeout(r, 500))
-      snap = snapshot()
-    }
-  }
+  editBtn = await clickStable((v) => v.role === "button" && v.name === `Edit ${CF_LABEL}`)
   if (!editBtn) {
     shot("07-inline-RED", { full: true })
     return record(name, "RED", "no inline edit affordance on the custom column", "07-inline-RED.png")
   }
-  click(editBtn, snap.refs[editBtn]?.name)
   snap = snapshot()
-  const cellCombo = Object.entries(snap.refs).find(([, v]) => v.role === "combobox" && v.name === CF_LABEL)?.[0]
+  const cellCombo = await clickStable((v) => v.role === "combobox" && v.name === CF_LABEL)
   if (!cellCombo) {
     shot("07-inline-RED", { full: true })
     return record(name, "RED", "the custom cell did not open a select", "07-inline-RED.png")
@@ -497,7 +512,7 @@ export async function scenarioCustomField() {
     shot("07-inline-RED", { full: true })
     return record(name, "RED", "the custom select does not offer the defined options", "07-inline-RED.png")
   }
-  click(emailOption, snap.refs[emailOption]?.name)
+  click(emailOption, snapshot().refs[emailOption]?.name)
   shot("07-inline-saved")
 
   // 4. the save must be VISIBLE in the cell, not merely "somewhere on the
@@ -506,11 +521,7 @@ export async function scenarioCustomField() {
   // "email" passes even with the merge bug (QWB-52 review 3). Close the
   // panel, re-snapshot, and require BOTH: the cell's edit button exists AND
   // the options string is gone AND the bare value text is on the page.
-  const hideBtn = Object.entries(snapshot().refs).find(
-    ([, v]) => v.role === "button" && v.name === "Hide custom fields",
-  )?.[0]
-  if (hideBtn) {
-    click(hideBtn, "Hide custom fields")
+  if (await clickStable((v) => v.role === "button" && v.name === "Hide custom fields", "Hide custom fields")) {
     await pause()
   }
   snap = snapshot()
@@ -533,37 +544,28 @@ export async function scenarioCustomField() {
   // read. The panel was closed for the value assertion above, so reopen it
   // first. The delete is a two-step confirm in the UI (QWB-52 review 17):
   // the first click scans how many rows carry a value.
-  const reopenBtn = Object.entries(snap.refs).find(
-    ([, v]) => v.role === "button" && v.name === "Custom fields",
-  )?.[0]
+  const reopenBtn = await clickStable((v) => v.role === "button" && v.name === "Custom fields", "Custom fields")
   if (!reopenBtn) {
     shot("07-delete-RED", { full: true })
     return record(name, "RED", "the Custom fields button is gone after closing the panel", "07-delete-RED.png")
   }
-  click(reopenBtn, "Custom fields")
   if (!(await waitForText("Fields defined at runtime", 15_000))) {
     shot("07-delete-RED", { full: true })
     return record(name, "RED", "definitions panel did not reopen", "07-delete-RED.png")
   }
   snap = snapshot()
-  const deleteBtn = Object.entries(snap.refs).find(
-    ([, v]) => v.role === "button" && v.name === `Delete ${CF_LABEL}`,
-  )?.[0]
+  const deleteBtn = await clickStable((v) => v.role === "button" && v.name === `Delete ${CF_LABEL}`)
   if (!deleteBtn) {
     shot("07-delete-RED", { full: true })
     return record(name, "RED", "delete button for the definition not found", "07-delete-RED.png")
   }
-  click(deleteBtn, snap.refs[deleteBtn]?.name)
   await pause()
   snap = snapshot()
-  const confirmBtn = Object.entries(snap.refs).find(
-    ([, v]) => v.role === "button" && v.name === `Confirm delete ${CF_LABEL}`,
-  )?.[0]
+  const confirmBtn = await clickStable((v) => v.role === "button" && v.name === `Confirm delete ${CF_LABEL}`)
   if (!confirmBtn) {
     shot("07-delete-RED", { full: true })
     return record(name, "RED", "the delete confirm step did not appear", "07-delete-RED.png")
   }
-  click(confirmBtn, snap.refs[confirmBtn]?.name)
   // The column header must vanish from the snapshot.
   let columnGone = true
   const deadline = Date.now() + 15_000
@@ -598,19 +600,15 @@ export async function scenarioReader(qwbePort) {
     shot("08-reader-RED", { full: true })
     return record(name, "RED", "the Sign in submit never became enabled (no hydration)", "08-reader-RED.png")
   }
-  let snap = snapshot()
-  const userRef = refFor(snap.refs, "Username")
-  const passRef = refFor(snap.refs, "Password")
-  if (!userRef || !passRef) {
+  const userRef = await clickStable((v) => v.role === "textbox" && v.name === "Username", "Username")
+  if (!userRef) {
     shot("08-reader-RED", { full: true })
     return record(name, "RED", "login form fields not found for the reader", "08-reader-RED.png")
   }
-  click(userRef, snap.refs[userRef]?.name)
   type("reader")
-  click(passRef, snap.refs[passRef]?.name)
+  await clickStable((v) => v.role === "textbox" && v.name === "Password", "Password")
   type("reader")
-  const submit = refFor(snap.refs, (n) => n === "Sign in")
-  click(submit, snap.refs[submit]?.name)
+  await clickStable((v) => v.role === "button" && v.name === "Sign in", "Sign in")
   const landed = (await waitForUrl(".*/me.*", 20_000)) && (await waitForText("Signed in as", 15_000))
   if (!landed) {
     const fields = orca(
@@ -682,35 +680,29 @@ const N_LABEL = "E2E Note"
 /** Define one field through the open panel; fresh snapshot for every step. */
 async function defineField(name, label, typeName, options) {
   for (let i = 0; i < 20; i++) {
-    const snap = snapshot()
-    const nameBox = Object.entries(snap.refs).find(([, v]) => v.role === "textbox" && v.name === "Name")?.[0]
-    const labelBox = Object.entries(snap.refs).find(([, v]) => v.role === "textbox" && v.name === "Label")?.[0]
-    const typeCombo = Object.entries(snap.refs).find(([, v]) => v.role === "combobox" && /type/i.test(v.name ?? ""))?.[0]
-    if (nameBox && labelBox && typeCombo) {
-      click(nameBox, snap.refs[nameBox]?.name)
+    const nameBox = await clickStable((v) => v.role === "textbox" && v.name === "Name", "Name")
+    const typeCombo = await clickStable((v) => v.role === "combobox" && /type/i.test(v.name ?? ""))
+    if (nameBox && typeCombo) {
       keypress("ctrl+a")
       type(name)
-      click(labelBox, snap.refs[labelBox]?.name)
+      const labelBox2 = await clickStable((v) => v.role === "textbox" && v.name === "Label", "Label")
       keypress("ctrl+a")
       type(label)
-      if (await openSelect(typeCombo)) {
+      if (labelBox2 && (await openSelect(typeCombo))) {
         const s2 = snapshot()
         const option = Object.entries(s2.refs).find(([, v]) => v.role === "option" && v.name === typeName)?.[0]
         if (option) {
-          click(option, s2.refs[option]?.name)
+          click(option, snapshot().refs[option]?.name)
           await new Promise((r) => setTimeout(r, 500))
           const s3 = snapshot()
           if (typeName === "select") {
             const optionsBox = Object.entries(s3.refs).find(([, v]) => v.role === "textbox" && /Options/.test(v.name ?? ""))?.[0]
-            if (optionsBox) {
-              click(optionsBox, s3.refs[optionsBox]?.name)
+            if (optionsBox && (await clickStable((v) => v.role === "textbox" && /Options/.test(v.name ?? "")))) {
               type(options ?? "")
             }
           }
-          const s4 = snapshot()
-          const addBtn = refFor(s4.refs, "Add field")
+          const addBtn = await clickStable((v) => v.role === "button" && v.name === "Add field", "Add field")
           if (addBtn) {
-            click(addBtn, s4.refs[addBtn]?.name)
             // The definition row appears (its delete button names it).
             for (let j = 0; j < 20; j++) {
               if (Object.values(snapshot().refs).some((v) => v.role === "button" && v.name === `Delete ${label}`)) return true
@@ -733,9 +725,13 @@ async function openCellEditor(label) {
       ([, v]) => v.role === "button" && v.name === `Edit ${label}`,
     )?.[0]
     if (btn) {
-      click(btn, snap.refs[btn]?.name)
-      await pause(1200)
-      return true
+      try {
+        click(btn, snap.refs[btn]?.name)
+        await pause(1200)
+        return true
+      } catch (e) {
+        if (!String(e.message).includes("browser_stale_ref")) throw e
+      }
     }
     await new Promise((r) => setTimeout(r, 500))
   }
@@ -745,17 +741,11 @@ async function openCellEditor(label) {
 /** Delete one definition through the two-step confirm; true when its row is gone. */
 async function deleteField(label) {
   for (let i = 0; i < 20; i++) {
-    const snap = snapshot()
-    const del = Object.entries(snap.refs).find(([, v]) => v.role === "button" && v.name === `Delete ${label}`)?.[0]
+    const del = await clickStable((v) => v.role === "button" && v.name === `Delete ${label}`)
     if (del) {
-      click(del, snap.refs[del]?.name)
       await pause()
-      const s2 = snapshot()
-      const confirm = Object.entries(s2.refs).find(
-        ([, v]) => v.role === "button" && v.name === `Confirm delete ${label}`,
-      )?.[0]
+      const confirm = await clickStable((v) => v.role === "button" && v.name === `Confirm delete ${label}`)
       if (confirm) {
-        click(confirm, s2.refs[confirm]?.name)
         for (let j = 0; j < 20; j++) {
           if (!Object.values(snapshot().refs).some((v) => v.role === "button" && v.name === `Delete ${label}`)) return true
           await new Promise((r) => setTimeout(r, 500))
@@ -773,12 +763,11 @@ export async function scenarioCustomFieldTypes(api, seed) {
   await open("/contacts")
   await settle(CONTACT_LINKED)
   let snap = snapshot()
-  const panelBtn = refFor(snap.refs, (n) => n === "Custom fields")
+  const panelBtn = await clickStable((v) => v.role === "button" && v.name === "Custom fields", "Custom fields")
   if (!panelBtn) {
     shot("09-panel-RED", { full: true })
     return record(name, "RED", "no Custom fields button on the contacts list", "09-panel-RED.png")
   }
-  click(panelBtn, "Custom fields")
   if (!(await waitForText("Fields defined at runtime", 15_000))) {
     shot("09-panel-RED", { full: true })
     return record(name, "RED", "definitions panel did not open", "09-panel-RED.png")
@@ -832,8 +821,12 @@ export async function scenarioCustomFieldTypes(api, seed) {
         const s = snapshot()
         const box = Object.entries(s.refs).find(([, v]) => v.role === "checkbox" && v.name === B_LABEL)?.[0]
         if (box) {
-          click(box, s.refs[box]?.name)
-          return true
+          try {
+            click(box, snapshot().refs[box]?.name)
+            return true
+          } catch (e) {
+            if (!String(e.message).includes("browser_stale_ref")) throw e
+          }
         }
         await new Promise((r) => setTimeout(r, 500))
       }
