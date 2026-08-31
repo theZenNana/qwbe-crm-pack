@@ -1,3 +1,4 @@
+// @ts-check
 // The six end-to-end scenarios (QWB-51), driven through the Orca browser.
 //
 // Every scenario records one PASS / RED / SKIP line and at least one screenshot into the
@@ -266,22 +267,30 @@ export async function scenarioList() {
     return record(name, "RED", "Name filter input not found", "02-search-RED.png")
   }
   type(ORG_A)
-  const narrowed = await waitForText(ORG_A) && (async () => {
-    await new Promise((r) => setTimeout(r, 1500))
-    return !snapshot().text.includes(ORG_B)
-  })()
+  // Every operand is a settled value: waitForText is awaited on its own line,
+  // and the Beta check runs on one snapshot taken after the filter had time
+  // to apply. The old form `await waitForText(X) && (async () => {...})()`
+  // bound await to the LEFT operand only, so the right side was an unawaited
+  // Promise -- always truthy -- and the assertion could never fail (QWB-54).
+  const alphaShown = await waitForText(ORG_A)
+  await new Promise((r) => setTimeout(r, 1500))
+  const betaGone = !snapshot().text.includes(ORG_B)
+  const narrowed = alphaShown && betaGone
   snap = snapshot()
   shot("02-accounts-searched")
   return record(name, narrowed ? "PASS" : "RED", narrowed ? "sorted desc and filtered to Alpha" : "filter did not narrow the list", "02-accounts-searched.png")
 }
 
 // --- 3. inline edit on an editable field saves without a reload -----------------
-export async function scenarioInlineEdit() {
+export async function scenarioInlineEdit(api) {
   const name = "inline edit on an editable field saves and shows without a reload"
   await open("/accounts")
   await settle(ORG_A)
   let snap = snapshot()
-  const newValue = "E2E City Edited 42"
+  // Unique per run: a previous run that crashed before teardown can leave its
+  // edited value on a row, and a constant value would let THIS run's read-back
+  // mistake that stale row for this run's save.
+  const newValue = `E2E City Edited ${Date.now()}`
   const findEditor = (refs) =>
     Object.entries(refs).find(([, v]) => v.role === "textbox" && /city/i.test(v.name ?? ""))?.[0]
   // The row for Alpha: editable cells carry buttons whose accessible name is
@@ -353,9 +362,22 @@ export async function scenarioInlineEdit() {
   snap = snapshot()
   shot("03-after-inline-edit")
   const noError = !snap.text.includes("invalid") && !snap.text.includes("failed")
-  const verdict = saved && noError ? "PASS" : "RED"
+  // Page text is not proof the save reached the backend: the open editor held
+  // the very text being waited for. Read the rows back through the API and
+  // compare the field (the form of scenarioCustomFieldTypes). The value is
+  // unique to this run, so the row that carries it can only be this run's save.
+  const rows = (await api.call("/accounts?limit=50")).body?.rows ?? []
+  const savedRow = rows.find((r) => r.billingCity === newValue)
+  const verdict = saved && noError && Boolean(savedRow) ? "PASS" : "RED"
   const note = firstClickOpened ? "" : " (first click produced no editor; one freshly resolved retry)"
-  return record(name, verdict, verdict === "PASS" ? `${newValue} visible after Enter${note}` : "new value did not appear", "03-after-inline-edit.png")
+  return record(
+    name,
+    verdict,
+    verdict === "PASS"
+      ? `${newValue} visible after Enter and billingCity read back through the API${note}`
+      : `new value missing on the page or in the backend row (api rows: ${rows.length}, page=${Boolean(saved)}, noError=${noError})`,
+    "03-after-inline-edit.png",
+  )
 }
 
 // --- 4. inline edit on a NON-editable field is refused --------------------------
@@ -580,12 +602,17 @@ export async function scenarioCustomField(api) {
     ([, v]) => v.role === "button" && v.name === `Edit ${CF_LABEL}`,
   )?.[0]
   const cellShowsValue = snap.text.includes("email")
-  if (!panelClosed || !cellBtn || !cellShowsValue) {
+  // The cell text is not proof either (the panel sat right above it): read the
+  // contact rows back through the API and require the saved value under
+  // `custom` -- the save must reach qwbe, not only the page.
+  const contactRows = (await api.call("/contacts?limit=50")).body?.rows ?? []
+  const savedToBackend = contactRows.some((r) => r?.custom?.[CF_NAME] === "email")
+  if (!panelClosed || !cellBtn || !cellShowsValue || !savedToBackend) {
     shot("07-inline-RED", { full: true })
     return record(
       name,
       "RED",
-      `cell after save: panel closed=${panelClosed}, edit button=${Boolean(cellBtn)}, value text=${cellShowsValue}`,
+      `cell after save: panel closed=${panelClosed}, edit button=${Boolean(cellBtn)}, value text=${cellShowsValue}, backend=${savedToBackend}`,
       "07-inline-RED.png",
     )
   }
@@ -857,7 +884,7 @@ export async function scenarioCustomFieldTypes(api, seed) {
     // qwbe's own refusal, which an optional field would never produce.
     [N_NAME, N_LABEL, "text", null, true],
   ]) {
-    if (!(await defineField(n, l, t, o, req))) failures.push(`define ${n} failed`)
+    if (!(await defineField(n, l, t, o, Boolean(req)))) failures.push(`define ${n} failed`)
   }
   if (failures.length > 0) {
     shot("09-define-RED", { full: true })
@@ -1015,7 +1042,7 @@ export async function runAll(api, seed) {
     return verdicts
   }
   verdicts.push(await scenarioList())
-  verdicts.push(await scenarioInlineEdit())
+  verdicts.push(await scenarioInlineEdit(api))
   verdicts.push(await scenarioNonEditable(api))
   verdicts.push(await scenarioNavigation(seed))
   verdicts.push(await scenarioCustomField(api))
