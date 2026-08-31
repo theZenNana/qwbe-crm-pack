@@ -11,7 +11,7 @@
 // parameters travel to qwbe; nothing here slices a full result set.
 
 import Link from "next/link"
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import {
   type ColumnSpec,
@@ -480,6 +480,36 @@ function Cell({
   const key = `${String(row.id)}:${field.name}`
   const editing = edit?.id === String(row.id) && edit.field === field.name
 
+  // Commit (or dismiss) when the pointer goes down OUTSIDE the editor, as a
+  // capture listener on the document. NOT on blur: a trusted click on the
+  // edit button queues a browser-side focus change that lands seconds later
+  // (observed 2026-09-01: the freshly mounted editor input was blurred with
+  // no related target, 4-9 s after the click, by no JavaScript call at all),
+  // and a commit-on-blur then closes the editor before anyone can type. A
+  // capture pointerdown runs before the focus machinery and is driven by the
+  // real pointer, so it fires exactly when a user clicks somewhere else.
+  // Radix portals (the open select dropdown) are excluded: choosing an
+  // option there IS the edit, not a dismissal.
+  const editorRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (!editing) return undefined
+    const onDocPointerDown = (e: PointerEvent) => {
+      const root = editorRef.current
+      const target = e.target
+      if (!root || !(target instanceof Node)) return
+      if (root.contains(target)) return
+      if (target.parentElement?.closest("[data-radix-popper-content-wrapper], [role='listbox']")) return
+      if (renderKindOf(field) === "text") {
+        const input = root.querySelector("input")
+        if (input) onSave(input.value)
+      } else {
+        setEdit(null)
+      }
+    }
+    document.addEventListener("pointerdown", onDocPointerDown, true)
+    return () => document.removeEventListener("pointerdown", onDocPointerDown, true)
+  }, [editing, field, onSave, setEdit])
+
   const startEdit = () =>
     setEdit({
       id: String(row.id),
@@ -520,7 +550,8 @@ function Cell({
   return (
     <div className="flex flex-col gap-1">
       {editing ? (
-        renderKindOf(field) === "select" ? (
+        <div ref={editorRef} className="flex flex-col gap-1">
+        {renderKindOf(field) === "select" ? (
           <Select
             // Radix forbids an empty-string SelectItem value; the empty item
             // rides on a sentinel and is translated back to "" on save.
@@ -551,7 +582,6 @@ function Cell({
             aria-label={field.label}
             checked={edit.value === "true"}
             // Clicking elsewhere must not leave the cell stuck in edit mode.
-            onBlur={() => setEdit(null)}
             onCheckedChange={(checked) => {
               setEdit(null)
               onSave(checked ? "true" : "false")
@@ -562,13 +592,13 @@ function Cell({
             autoFocus
             defaultValue={edit.value}
             aria-label={field.label}
-            onBlur={(e) => onSave(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") onSave(e.currentTarget.value)
               if (e.key === "Escape") setEdit(null)
             }}
           />
-        )
+        )}
+        </div>
       ) : field.relation && hrefForRelation(field.relation.target, String(value ?? "")) ? (
         <Link
           className="underline"
@@ -588,6 +618,15 @@ function Cell({
           // The accessible name must say what the button does; the cell value
           // alone left a screen reader no way to find the edit affordance.
           aria-label={`Edit ${field.label}`}
+          // A REAL (trusted) click moves focus to this button; when the
+          // editor replaces it, the browser's delayed focus lands on the
+          // node that no longer exists, blurs the freshly mounted editor
+          // input, and the input's commit-on-blur closes the editor before
+          // anyone could type (observed 2026-09-01: trusted click, handler
+          // ran, editor mounted and focused, then a blurred input closed it).
+          // Suppressing the mousedown focus transfer removes the window;
+          // the editor's own autoFocus then holds the focus.
+          onMouseDown={(e) => e.preventDefault()}
           onClick={startEdit}
         >
           {cellText(content)}
