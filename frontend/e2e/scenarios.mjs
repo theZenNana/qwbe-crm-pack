@@ -82,6 +82,39 @@ async function waitSignInEnabled(timeout = 15_000) {
 }
 
 /**
+ * Log in through the real UI. Types are verified against the DOM values
+ * before the submit: an earlier failure showed the username field holding
+ * "reader" plus trailing spaces (nothing this suite typed), so the values
+ * are asserted, corrected, and only then submitted.
+ */
+async function loginThroughUi(username, password) {
+  await open("/login")
+  await settle("Sign in")
+  if (!(await waitSignInEnabled())) return false
+  const readFields = () =>
+    orca(
+      "eval",
+      "--expression",
+      "JSON.stringify([document.getElementById('username')?.value ?? null, document.getElementById('password')?.value ?? null])",
+    ).result
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const [u, p] = JSON.parse(String(readFields() ?? "[]"))
+    if (u === username && p === password) break
+    if (u !== username) {
+      await clickStable((v) => v.role === "textbox" && v.name === "Username", "Username")
+      type(username)
+    }
+    if (p !== password) {
+      await clickStable((v) => v.role === "textbox" && v.name === "Password", "Password")
+      type(password)
+    }
+  }
+  const [u, p] = JSON.parse(String(readFields() ?? "[]"))
+  if (u !== username || p !== password) return false
+  return Boolean(await clickStable((v) => v.role === "button" && v.name === "Sign in", "Sign in"))
+}
+
+/**
  * Click a freshly found ref, retrying with a NEW snapshot when Orca reports
  * the ref stale: a React re-render between the snapshot and the click can
  * replace the node the ref pointed at. The retry is on the FINDER, not on
@@ -164,26 +197,11 @@ async function openSelect(ref) {
 // --- 1. login with the correct credentials lands on the identity page -----------
 export async function scenarioLogin() {
   const name = "login lands on the identity page"
-  await open("/login")
-  await settle("Sign in")
-  if (!(await waitSignInEnabled())) {
+  if (!(await loginThroughUi(CONFIG.username, CONFIG.password))) {
     shot("01-login-page-RED", { full: true })
-    return record(name, "RED", "the Sign in submit never became enabled (no hydration)", "01-login-page-RED.png")
+    return record(name, "RED", "login form fields not found or the submit never enabled", "01-login-page-RED.png")
   }
-  shot("01-login-page")
-  const userRef = await clickStable((v) => v.role === "textbox" && v.name === "Username", "Username")
-  if (!userRef) {
-    shot("01-login-page-RED", { full: true })
-    return record(name, "RED", "login form fields not found", "01-login-page-RED.png")
-  }
-  type(CONFIG.username)
-  await clickStable((v) => v.role === "textbox" && v.name === "Password", "Password")
-  type(CONFIG.password)
-  await clickStable((v) => v.role === "button" && v.name === "Sign in", "Sign in")
   const landed = await waitForUrl(".*/me.*")
-  // Assert the text with Orca's own wait, not with the snapshot string: the snapshot is an
-  // accessibility tree that does not always carry a card's description text, so a page that
-  // plainly reads "Signed in as admin" was scored RED three runs in a row.
   const textShown = await waitForText("Signed in as", 20_000)
   if (!landed || !textShown) {
     const fields = orca(
@@ -605,35 +623,16 @@ export async function scenarioCustomField() {
 // done by then.
 export async function scenarioReader(qwbePort) {
   const name = "a reader sees no definitions panel and the definition API refuses the write"
-  await open("/login")
-  await settle("Sign in")
-  if (!(await waitSignInEnabled())) {
-    shot("08-reader-RED", { full: true })
-    return record(name, "RED", "the Sign in submit never became enabled (no hydration)", "08-reader-RED.png")
-  }
-  const userRef = await clickStable((v) => v.role === "textbox" && v.name === "Username", "Username")
-  if (!userRef) {
-    shot("08-reader-RED", { full: true })
-    return record(name, "RED", "login form fields not found for the reader", "08-reader-RED.png")
-  }
-  type("reader")
-  await clickStable((v) => v.role === "textbox" && v.name === "Password", "Password")
-  type("reader")
-  await clickStable((v) => v.role === "button" && v.name === "Sign in", "Sign in")
-  const landed = (await waitForUrl(".*/me.*", 20_000)) && (await waitForText("Signed in as", 15_000))
-  if (!landed) {
+  if (!(await loginThroughUi("reader", "reader"))) {
     const fields = orca(
       "eval",
       "--expression",
-      "JSON.stringify([...document.querySelectorAll('input')].map((i) => [i.name || i.id, i.value]))",
+      "JSON.stringify([document.getElementById('username')?.value, document.getElementById('password')?.value])",
     )
-    console.log(`  reader fields after submit: ${fields.result}`)
-  }
-  if (!landed) {
     shot("08-reader-RED", { full: true })
-    snap = snapshot()
-    return record(name, "RED", `reader login did not land on the identity page (origin ${snap.origin}; text: ${snap.text.replace(/\s+/g, " ").slice(0, 200)})`, "08-reader-RED.png")
+    return record(name, "RED", `reader login through the UI failed; fields: ${fields.result}`, "08-reader-RED.png")
   }
+  let snap = snapshot()
   await open("/contacts")
   // The seeded rows belong to the admin, and entity permissions are
   // per-owner: a reader sees an empty list (or the access alert), NOT the
