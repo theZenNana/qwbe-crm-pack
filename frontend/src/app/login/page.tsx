@@ -52,7 +52,11 @@ export default function LoginPage() {
       return
     }
     toast.success("Signed in")
-    router.push("/me")
+    // Back to where the middleware (or an expired session) interrupted, when
+    // it named a route of this app: an absolute or protocol-relative value
+    // would turn the login page into an open redirect.
+    const next = new URLSearchParams(window.location.search).get("next")
+    router.push(next && next.startsWith("/") && !next.startsWith("//") ? next : "/me")
   }
 
   return (
