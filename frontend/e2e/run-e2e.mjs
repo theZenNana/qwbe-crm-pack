@@ -48,9 +48,14 @@ const freePort = async () => {
   fail("could not find a free port")
 }
 
-// --- stack startup (nohup from inside this script, PIDs recorded) -----------------
+// --- stack startup (nohup in its own process GROUP, PIDs recorded) ----------------
+// setsid: the recorded pid must be the GROUP leader, so the teardown can kill
+// the whole tree — killing the npm wrapper alone leaves next-server alive, and
+// the leaked server then holds the dev lock and the port (observed: a later
+// run's frontend refused to boot with "Another next dev server is already
+// running").
 const nohup = (cmd, logfile, cwd) => {
-  const out = execSync(`nohup ${cmd} > ${logfile} 2>&1 & echo $!`, { encoding: "utf8", cwd })
+  const out = execSync(`setsid nohup ${cmd} > ${logfile} 2>&1 & echo $!`, { encoding: "utf8", cwd })
   return Number(out.trim().split("\n").pop())
 }
 
@@ -70,20 +75,19 @@ const poll = async (url, { expect, tries = 60, delay = 1000 }) => {
 const pids = []
 const killStack = () => {
   for (const pid of pids) {
-    try {
-      process.kill(pid, "SIGTERM")
-    } catch {
-      /* already gone */
+    for (const signal of ["SIGTERM", "SIGKILL"]) {
+      // The group first (the recorded pid is its leader); a process may have
+      // left the group, so signal it directly too.
+      for (const target of [-pid, pid]) {
+        try {
+          process.kill(target, signal)
+        } catch {
+          /* already gone */
+        }
+      }
     }
   }
   spawnSync("sleep", ["1"])
-  for (const pid of pids) {
-    try {
-      process.kill(pid, "SIGKILL")
-    } catch {
-      /* already gone */
-    }
-  }
 }
 
 // ---------------------------------------------------------------------------------
