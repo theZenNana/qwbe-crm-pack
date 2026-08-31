@@ -227,18 +227,6 @@ export function CubeList({
             }
           : p,
       )
-      // Only the patched key is merged: a concurrent, out-of-order response
-      // body must not overwrite the other columns of the row.
-      setPage((p) =>
-        p
-          ? {
-              ...p,
-              rows: p.rows.map((r) =>
-                String(r.id) === String(row.id) ? { ...r, [result.field]: result.value } : r,
-              ),
-            }
-          : p,
-      )
       setCellErrors((e) => {
         const next = { ...e }
         delete next[key]
