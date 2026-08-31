@@ -637,6 +637,272 @@ export async function scenarioReader(qwbePort) {
   )
 }
 
+
+// --- 9. the type coverage the ticket names (QWB-52 review 8) ----------------------
+// bool / number / date custom fields set inline (bool through the checkbox
+// editor, number and date through the text editor), a required TEXT field
+// emptied to "" refused with qwbe's own message, and every definition
+// cleaned up through the two-step delete. Values are asserted against the
+// backend (the row's own API) as well as the page.
+const V_NAME = "e2eScore"
+const V_LABEL = "E2E Score"
+const B_NAME = "e2eVip"
+const B_LABEL = "E2E Vip"
+const D_NAME = "e2eStart"
+const D_LABEL = "E2E Start"
+const N_NAME = "e2eNote"
+const N_LABEL = "E2E Note"
+
+/** Define one field through the open panel; fresh snapshot for every step. */
+async function defineField(name, label, typeName, options) {
+  for (let i = 0; i < 20; i++) {
+    const snap = snapshot()
+    const nameBox = Object.entries(snap.refs).find(([, v]) => v.role === "textbox" && v.name === "Name")?.[0]
+    const labelBox = Object.entries(snap.refs).find(([, v]) => v.role === "textbox" && v.name === "Label")?.[0]
+    const typeCombo = Object.entries(snap.refs).find(([, v]) => v.role === "combobox" && /type/i.test(v.name ?? ""))?.[0]
+    if (nameBox && labelBox && typeCombo) {
+      click(nameBox, snap.refs[nameBox]?.name)
+      keypress("ctrl+a")
+      type(name)
+      click(labelBox, snap.refs[labelBox]?.name)
+      keypress("ctrl+a")
+      type(label)
+      if (await openSelect(typeCombo)) {
+        const s2 = snapshot()
+        const option = Object.entries(s2.refs).find(([, v]) => v.role === "option" && v.name === typeName)?.[0]
+        if (option) {
+          click(option, s2.refs[option]?.name)
+          await new Promise((r) => setTimeout(r, 500))
+          const s3 = snapshot()
+          if (typeName === "select") {
+            const optionsBox = Object.entries(s3.refs).find(([, v]) => v.role === "textbox" && /Options/.test(v.name ?? ""))?.[0]
+            if (optionsBox) {
+              click(optionsBox, s3.refs[optionsBox]?.name)
+              type(options ?? "")
+            }
+          }
+          const s4 = snapshot()
+          const addBtn = refFor(s4.refs, "Add field")
+          if (addBtn) {
+            click(addBtn, s4.refs[addBtn]?.name)
+            // The definition row appears (its delete button names it).
+            for (let j = 0; j < 20; j++) {
+              if (Object.values(snapshot().refs).some((v) => v.role === "button" && v.name === `Delete ${label}`)) return true
+              await new Promise((r) => setTimeout(r, 500))
+            }
+          }
+        }
+      }
+    }
+    await new Promise((r) => setTimeout(r, 500))
+  }
+  return false
+}
+
+/** Open the inline editor of one custom cell with a SINGLE click. */
+async function openCellEditor(label) {
+  for (let i = 0; i < 20; i++) {
+    const snap = snapshot()
+    const btn = Object.entries(snap.refs).find(
+      ([, v]) => v.role === "button" && v.name === `Edit ${label}`,
+    )?.[0]
+    if (btn) {
+      click(btn, snap.refs[btn]?.name)
+      await pause(1200)
+      return true
+    }
+    await new Promise((r) => setTimeout(r, 500))
+  }
+  return false
+}
+
+/** Delete one definition through the two-step confirm; true when its row is gone. */
+async function deleteField(label) {
+  for (let i = 0; i < 20; i++) {
+    const snap = snapshot()
+    const del = Object.entries(snap.refs).find(([, v]) => v.role === "button" && v.name === `Delete ${label}`)?.[0]
+    if (del) {
+      click(del, snap.refs[del]?.name)
+      await pause()
+      const s2 = snapshot()
+      const confirm = Object.entries(s2.refs).find(
+        ([, v]) => v.role === "button" && v.name === `Confirm delete ${label}`,
+      )?.[0]
+      if (confirm) {
+        click(confirm, s2.refs[confirm]?.name)
+        for (let j = 0; j < 20; j++) {
+          if (!Object.values(snapshot().refs).some((v) => v.role === "button" && v.name === `Delete ${label}`)) return true
+          await new Promise((r) => setTimeout(r, 500))
+        }
+        return false
+      }
+    }
+    await new Promise((r) => setTimeout(r, 500))
+  }
+  return false
+}
+
+export async function scenarioCustomFieldTypes(api, seed) {
+  const name = "bool, number and date custom fields set inline; an emptied required text field is refused"
+  await open("/contacts")
+  await settle(CONTACT_LINKED)
+  let snap = snapshot()
+  const panelBtn = refFor(snap.refs, (n) => n === "Custom fields")
+  if (!panelBtn) {
+    shot("09-panel-RED", { full: true })
+    return record(name, "RED", "no Custom fields button on the contacts list", "09-panel-RED.png")
+  }
+  click(panelBtn, "Custom fields")
+  if (!(await waitForText("Fields defined at runtime", 15_000))) {
+    shot("09-panel-RED", { full: true })
+    return record(name, "RED", "definitions panel did not open", "09-panel-RED.png")
+  }
+
+  const failures = []
+  for (const [n, l, t, o] of [
+    [V_NAME, V_LABEL, "number", null],
+    [B_NAME, B_LABEL, "bool", null],
+    [D_NAME, D_LABEL, "date", null],
+    [N_NAME, N_LABEL, "text", null],
+  ]) {
+    if (!(await defineField(n, l, t, o))) failures.push(`define ${n} failed`)
+  }
+  if (failures.length > 0) {
+    shot("09-define-RED", { full: true })
+    return record(name, "RED", failures.join("; "), "09-define-RED.png")
+  }
+  const columnShown = await waitForText(N_LABEL, 15_000)
+  if (!columnShown) {
+    shot("09-column-RED", { full: true })
+    return record(name, "RED", "the note column did not appear after defining", "09-column-RED.png")
+  }
+  shot("09-columns-appear")
+
+  // Set the number field inline through the text editor.
+  let ok = true
+  ok = (await openCellEditor(V_LABEL)) &&
+    (await (async () => {
+      for (let i = 0; i < 10; i++) {
+        const s = snapshot()
+        const box = Object.entries(s.refs).find(([, v]) => v.role === "textbox" && v.name === V_LABEL)?.[0]
+        if (box) {
+          keypress("ctrl+a")
+          type("7")
+          keypress("Return")
+          return true
+        }
+        await new Promise((r) => setTimeout(r, 500))
+      }
+      return false
+    })())
+  if (!ok) return record(name, "RED", `the ${V_LABEL} editor did not open`, "09-number-RED.png")
+  await waitForText("7", 10_000)
+
+  // The bool field through the checkbox editor: a single trusted click on
+  // the checkbox toggles and saves.
+  ok = (await openCellEditor(B_LABEL)) &&
+    (await (async () => {
+      for (let i = 0; i < 10; i++) {
+        const s = snapshot()
+        const box = Object.entries(s.refs).find(([, v]) => v.role === "checkbox" && v.name === B_LABEL)?.[0]
+        if (box) {
+          click(box, s.refs[box]?.name)
+          return true
+        }
+        await new Promise((r) => setTimeout(r, 500))
+      }
+      return false
+    })())
+  if (!ok) return record(name, "RED", `the ${B_LABEL} checkbox did not open`, "09-bool-RED.png")
+  await pause()
+  snap = snapshot()
+  if (!snap.text.includes("yes")) return record(name, "RED", "the bool cell does not show yes after the toggle", "09-bool-RED.png")
+
+  // The date field: the metadata currently publishes it as text (QWB-52
+  // review 4: the kernel maps date to type string without a format), so it
+  // edits as text and the pack validates the YYYY-MM-DD shape.
+  ok = (await openCellEditor(D_LABEL)) &&
+    (await (async () => {
+      for (let i = 0; i < 10; i++) {
+        const s = snapshot()
+        const box = Object.entries(s.refs).find(([, v]) => v.role === "textbox" && v.name === D_LABEL)?.[0]
+        if (box) {
+          keypress("ctrl+a")
+          type("2026-01-02")
+          keypress("Return")
+          return true
+        }
+        await new Promise((r) => setTimeout(r, 500))
+      }
+      return false
+    })())
+  if (!ok) return record(name, "RED", `the ${D_LABEL} editor did not open`, "09-date-RED.png")
+  const dateShown = await waitForText("2026-01-02", 10_000)
+
+  // The required text field: set a value first, then empty it. The refusal
+  // must be qwbe's own message, shown in that cell, with the old value kept.
+  ok = (await openCellEditor(N_LABEL)) &&
+    (await (async () => {
+      for (let i = 0; i < 10; i++) {
+        const s = snapshot()
+        const box = Object.entries(s.refs).find(([, v]) => v.role === "textbox" && v.name === N_LABEL)?.[0]
+        if (box) {
+          keypress("ctrl+a")
+          type("hello")
+          keypress("Return")
+          return true
+        }
+        await new Promise((r) => setTimeout(r, 500))
+      }
+      return false
+    })())
+  const helloShown = await waitForText("hello", 10_000)
+  ok = ok && (await openCellEditor(N_LABEL)) &&
+    (await (async () => {
+      for (let i = 0; i < 10; i++) {
+        const s = snapshot()
+        const box = Object.entries(s.refs).find(([, v]) => v.role === "textbox" && v.name === N_LABEL)?.[0]
+        if (box) {
+          keypress("ctrl+a")
+          type("")
+          keypress("Return")
+          return true
+        }
+        await new Promise((r) => setTimeout(r, 500))
+      }
+      return false
+    })())
+  const refused = await waitForText("cannot be emptied", 15_000)
+  snap = snapshot()
+  shot("09-required-refused")
+
+  // The values the backend actually holds (the row's own API, admin session).
+  const row = (await api.call(`/contacts/${seed.contactLinked.id}`)).body
+  const custom = row?.custom ?? {}
+  const valueOk =
+    custom[V_NAME] === 7 &&
+    custom[B_NAME] === true &&
+    custom[D_NAME] === "2026-01-02" &&
+    custom[N_NAME] === "hello"
+
+  // Clean up every definition (two-step confirm; the panel is still open).
+  const cleaned =
+    (await deleteField(V_LABEL)) &&
+    (await deleteField(B_LABEL)) &&
+    (await deleteField(D_LABEL)) &&
+    (await deleteField(N_LABEL))
+
+  const pass = ok && helloShown && refused && valueOk && cleaned && dateShown
+  return record(
+    name,
+    pass ? "PASS" : "RED",
+    pass
+      ? "number 7, bool yes, date 2026-01-02 in the cells and the backend; the emptied required field refused with qwbe's message"
+      : `ok=${ok} hello=${helloShown} refused=${refused} values=${JSON.stringify(custom).slice(0, 120)} cleaned=${cleaned} date=${dateShown}`,
+    "09-required-refused.png",
+  )
+}
+
 /** Only the login scenario — used when the seed cannot get a session at all. */
 export async function scenarioLoginOnly() {
   await scenarioLogin()
@@ -655,6 +921,7 @@ export async function runAll(api, seed) {
   verdicts.push(await scenarioNonEditable(api))
   verdicts.push(await scenarioNavigation(seed))
   verdicts.push(await scenarioCustomField())
+  verdicts.push(await scenarioCustomFieldTypes(api, seed))
   verdicts.push(await scenarioLogout())
   verdicts.push(await scenarioReader(CONFIG.qwbePort))
   return verdicts
