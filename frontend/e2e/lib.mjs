@@ -52,9 +52,14 @@ export const CONFIG = {
 const results = []
 
 export function record(name, verdict, detail = "", screenshot = "") {
+  // A screenshot miss is an evidence degradation, not a silent pass: the
+  // verdict carries it (QWB-52 review 21) instead of only a console WARN.
+  if (verdict === "PASS" && typeof screenshot === "string" && screenshot.startsWith("(screenshot unavailable")) {
+    verdict = "PASS (no screenshot evidence)"
+  }
   results.push({ name, verdict, detail, screenshot })
-  console.log(`${verdict === "PASS" ? "  PASS" : verdict === "RED" ? "  RED " : "  SKIP"} ${name}${detail ? ` — ${detail}` : ""}${screenshot ? ` [${screenshot}]` : ""}`)
-  return verdict === "PASS"
+  console.log(`${verdict.startsWith("PASS") ? "  PASS" : verdict === "RED" ? "  RED " : "  SKIP"} ${name}${detail ? ` — ${detail}` : ""}${screenshot ? ` [${screenshot}]` : ""}`)
+  return verdict.startsWith("PASS")
 }
 
 export function writeResults(extraLines = []) {
@@ -160,7 +165,18 @@ export function refFor(refs, match) {
   return undefined
 }
 
-export const click = (ref) => orca("click", "--element", ref, ...pageArgs())
+export const click = (ref, expectName) => {
+  // The accessible name of the element just clicked: `type` asserts that the
+  // focus actually landed there, instead of assuming it did.
+  lastClicked = expectName ?? null
+  return orca("click", "--element", ref, ...pageArgs())
+}
+let lastClicked = null
+const activeElementName =
+  `(() => { const el = document.activeElement; if (!el) return "";` +
+  ` if (el.getAttribute("aria-label")) return el.getAttribute("aria-label");` +
+  ` const l = el instanceof HTMLElement && el.labels ? [...el.labels][0] : null;` +
+  ` return l ? l.textContent.trim() : "" })()`
 /**
  * Type at the current focus, through the browser, not the desktop.
  *
@@ -169,9 +185,23 @@ export const click = (ref) => orca("click", "--element", ref, ...pageArgs())
  * path below has the same semantics for the inputs this suite types into: the
  * value is set through the native setter (so React's controlled inputs see
  * it) and an `input` event is dispatched, exactly what a keystroke does.
+ *
+ * A synthetic value set is not a keystroke (locked-desktop workaround, QWB-52
+ * review 20), so the assertion that proves this helper did land is focus:
+ * after the click that preceded the type, document.activeElement must carry
+ * the same accessible name the click targeted.
  */
 export function type(text) {
   const payload = JSON.stringify(text)
+  if (lastClicked) {
+    const focus = orca("eval", "--expression", activeElementName, ...pageArgs())
+    const focusedName = typeof focus?.result === "string" ? focus.result : ""
+    if (focusedName !== lastClicked) {
+      throw new Error(
+        `type("${text}") would land on "${focusedName || "(no focus)"}, not the clicked "${lastClicked}"`,
+      )
+    }
+  }
   const r = orca(
     "eval",
     "--expression",

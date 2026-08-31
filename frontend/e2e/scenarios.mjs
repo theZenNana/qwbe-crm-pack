@@ -18,6 +18,7 @@ import {
   type,
   waitForText,
   waitForUrl,
+  qwbeClient,
 } from "./lib.mjs"
 import { CONTACT_LINKED, ORG_A, ORG_B } from "./seed.mjs"
 
@@ -126,12 +127,12 @@ export async function scenarioLogin() {
     shot("01-login-page-RED", { full: true })
     return record(name, "RED", "login form fields not found", "01-login-page-RED.png")
   }
-  click(userRef)
+  click(userRef, snap.refs[userRef]?.name)
   type(CONFIG.username)
-  click(passRef)
+  click(passRef, snap.refs[passRef]?.name)
   type(CONFIG.password)
   const submit = refFor(snap.refs, (n) => n === "Sign in")
-  click(submit)
+  click(submit, snap.refs[submit]?.name)
   const landed = await waitForUrl(".*/me.*")
   // Assert the text with Orca's own wait, not with the snapshot string: the snapshot is an
   // accessibility tree that does not always carry a card's description text, so a page that
@@ -171,9 +172,10 @@ export async function scenarioList() {
     shot("02-sort-RED", { full: true })
     return record(name, "RED", "Name column header not clickable", "02-sort-RED.png")
   }
-  click(header)
+  click(header, snap.refs[header]?.name)
   await waitForText("Name ↑")
-  click(sortBtn(snapshot().refs))
+  const second = sortBtn(snapshot().refs)
+  click(second, snapshot().refs[second]?.name)
   await waitForText("Name ↓")
   snap = snapshot()
   shot("02-accounts-sorted-desc")
@@ -189,7 +191,7 @@ export async function scenarioList() {
     shot("02-search-RED", { full: true })
     return record(name, "RED", "Name filter input not found", "02-search-RED.png")
   }
-  click(filter)
+  click(filter, snapshot().refs[filter]?.name)
   type(ORG_A)
   const narrowed = await waitForText(ORG_A) && (async () => {
     await new Promise((r) => setTimeout(r, 1500))
@@ -212,47 +214,33 @@ export async function scenarioInlineEdit() {
   // first city-ish button and the row context is verified by the saved value.
   // Match the BUTTON ref: the table cell carries the same accessible name
   // ("Edit Billing City") and clicking the cell does nothing.
-  const cityBtn = Object.entries(snap.refs).find(
-    ([, v]) => v.role === "button" && /^Edit .*City/i.test(v.name ?? ""),
-  )?.[0]
+  // The edit affordance is gated on hydration in the app: until the client
+  // has committed, an editable cell renders as plain text, so a click can
+  // never land on DOM the handler is not attached to yet (the race the
+  // earlier retry loop hid). Wait for the BUTTON to appear, then click ONCE
+  // (QWB-52 review 7: no retries, no synthetic fallback click).
+  let cityBtn
+  for (let i = 0; i < 20 && !cityBtn; i++) {
+    cityBtn = Object.entries(snap.refs).find(
+      ([, v]) => v.role === "button" && /^Edit .*City/i.test(v.name ?? ""),
+    )?.[0]
+    if (!cityBtn) {
+      await new Promise((r) => setTimeout(r, 500))
+      snap = snapshot()
+    }
+  }
   if (!cityBtn) {
     shot("03-edit-RED", { full: true })
     return record(name, "RED", "no editable City cell button found", "03-edit-RED.png")
   }
-  // A click that lands before React has hydrated does nothing; retry the
-  // click until the editor input actually appears (or fail loudly below).
-  //
-  // The coordinate click through the accessibility ref is also unreliable on
-  // these cell buttons right after the rows render (observed 2026-08-31, live
-  // stack, e2e/debug10.mjs): the trusted pointer/mouse/click sequence reaches
-  // the button and its handler prop is attached, yet React does not run it —
-  // while the page's own activation of the very same button always does. So
-  // alternate the two, and let the fallback focus the ref and click the
-  // focused element; same affordance, same accessible name, no selector
-  // duplication.
-  const findEditor = (refs) =>
-    Object.entries(refs).find(([, v]) => v.role === "textbox" && /city/i.test(v.name ?? ""))?.[0]
-  let target
-  for (let attempt = 0; attempt < 3 && !target; attempt++) {
-    click(cityBtn)
-    await pause(1500)
-    snap = snapshot()
-    // The open editor is a textbox labelled with the field's label ("Billing City");
-    // match the role, not just the name, so the column header cannot answer.
-    target = findEditor(snap.refs)
-  }
-  if (!target) {
-    orca("focus", "--element", cityBtn, ...pageArgs())
-    orca(
-      "eval",
-      "--expression",
-      "(() => { const el = document.activeElement; if (!el || el.tagName !== 'BUTTON') return 'no-button'; el.click(); return 'clicked' })()",
-      ...pageArgs(),
-    )
-    await pause(1500)
-    snap = snapshot()
-    target = findEditor(snap.refs)
-  }
+  click(cityBtn, snap.refs[cityBtn]?.name)
+  await pause(1500)
+  snap = snapshot()
+  // The open editor is a textbox labelled with the field's label ("Billing City");
+  // match the role, not just the name, so the column header cannot answer.
+  const target = Object.entries(snap.refs).find(
+    ([, v]) => v.role === "textbox" && /city/i.test(v.name ?? ""),
+  )?.[0]
   if (!target) {
     shot("03-edit-RED", { full: true })
     const cityRefs = Object.entries(snap.refs)
@@ -309,7 +297,7 @@ export async function scenarioNonEditable(api) {
   }
   const textField = refFor(snap.refs, (n) => n === String(value) || n.includes(nonEditable.label))
   if (textField) {
-    click(textField)
+    click(textField, snap.refs[textField]?.name)
     const after = snapshot()
     const openedInput = refFor(after.refs, (n) => n === nonEditable.label)
     shot("04-noneditable-after-click")
@@ -333,7 +321,7 @@ export async function scenarioNavigation(seed) {
     shot("05-nav-RED", { full: true })
     return record(name, "RED", "organization detail does not link to its contact", "05-nav-RED.png")
   }
-  click(contactLink)
+  click(contactLink, snap.refs[contactLink]?.name)
   const onContact = await waitForUrl(".*/contacts/.*")
   snap = snapshot()
   shot("05-contact-detail")
@@ -346,7 +334,7 @@ export async function scenarioNavigation(seed) {
     shot("05-nav-RED", { full: true })
     return record(name, "RED", "contact detail does not link back to the organization", "05-nav-RED.png")
   }
-  click(backLink)
+  click(backLink, snap.refs[backLink]?.name)
   const back = await waitForUrl(new RegExp(`.*/accounts/${seed.orgA.id}.*`))
   snap = snapshot()
   shot("05-back-on-account")
@@ -365,7 +353,7 @@ export async function scenarioLogout() {
     shot("06-logout-RED", { full: true })
     return record(name, "RED", "logout button not found on the identity page", "06-logout-RED.png")
   }
-  click(btn)
+  click(btn, snap.refs[btn]?.name)
   const back = await waitForUrl(".*/login.*")
   snap = snapshot()
   shot("06-after-logout")
@@ -401,7 +389,7 @@ export async function scenarioCustomField() {
     shot("07-panel-RED", { full: true })
     return record(name, "RED", "no Custom fields button on the contacts list", "07-panel-RED.png")
   }
-  click(panelBtn)
+  click(panelBtn, snap.refs[panelBtn]?.name)
   const panelOpen = await waitForText("Fields defined at runtime", 15_000)
   snap = snapshot()
   if (!panelOpen) {
@@ -417,10 +405,10 @@ export async function scenarioCustomField() {
     shot("07-define-RED", { full: true })
     return record(name, "RED", "definition form inputs not found", "07-define-RED.png")
   }
-  click(nameBox)
+  click(nameBox, snap.refs[nameBox]?.name)
   keypress("ctrl+a")
   type(CF_NAME)
-  click(labelBox)
+  click(labelBox, snap.refs[labelBox]?.name)
   keypress("ctrl+a")
   type(CF_LABEL)
   // Type select: open the combobox and pick "select".
@@ -436,7 +424,7 @@ export async function scenarioCustomField() {
     shot("07-define-RED", { full: true })
     return record(name, "RED", "the select option is missing from the type combobox", "07-define-RED.png")
   }
-  click(selectOption)
+  click(selectOption, snap.refs[selectOption]?.name)
   await new Promise((r) => setTimeout(r, 500))
   snap = snapshot()
   // The options input appears only for type=select (metadata-driven form).
@@ -445,7 +433,7 @@ export async function scenarioCustomField() {
     shot("07-define-RED", { full: true })
     return record(name, "RED", "options input did not appear for type select", "07-define-RED.png")
   }
-  click(optionsBox)
+  click(optionsBox, snap.refs[optionsBox]?.name)
   type(CF_OPTIONS)
   snap = snapshot()
   const addBtn = refFor(snap.refs, "Add field")
@@ -453,7 +441,7 @@ export async function scenarioCustomField() {
     shot("07-define-RED", { full: true })
     return record(name, "RED", "Add field button not found", "07-define-RED.png")
   }
-  click(addBtn)
+  click(addBtn, snap.refs[addBtn]?.name)
   // The definition appears in the panel list AND the column appears in the
   // table (the metadata is re-read after the definition change).
   const columnShown = await waitForText(CF_LABEL, 15_000)
@@ -464,15 +452,24 @@ export async function scenarioCustomField() {
     return record(name, "RED", `column ${CF_LABEL} did not appear after defining`, "07-column-RED.png")
   }
 
-  // 3. set it inline on the seeded contact
-  const editBtn = Object.entries(snap.refs).find(
-    ([, v]) => v.role === "button" && v.name === `Edit ${CF_LABEL}`,
-  )?.[0]
+  // 3. set it inline on the seeded contact. The affordance is gated on
+  // hydration in the app, so wait for the BUTTON (never click plain text)
+  // and then click ONCE (QWB-52 review 7).
+  let editBtn
+  for (let i = 0; i < 20 && !editBtn; i++) {
+    editBtn = Object.entries(snap.refs).find(
+      ([, v]) => v.role === "button" && v.name === `Edit ${CF_LABEL}`,
+    )?.[0]
+    if (!editBtn) {
+      await new Promise((r) => setTimeout(r, 500))
+      snap = snapshot()
+    }
+  }
   if (!editBtn) {
     shot("07-inline-RED", { full: true })
     return record(name, "RED", "no inline edit affordance on the custom column", "07-inline-RED.png")
   }
-  click(editBtn)
+  click(editBtn, snap.refs[editBtn]?.name)
   snap = snapshot()
   const cellCombo = Object.entries(snap.refs).find(([, v]) => v.role === "combobox" && v.name === CF_LABEL)?.[0]
   if (!cellCombo) {
@@ -486,16 +483,41 @@ export async function scenarioCustomField() {
     shot("07-inline-RED", { full: true })
     return record(name, "RED", "the custom select does not offer the defined options", "07-inline-RED.png")
   }
-  click(emailOption)
-  const saved = await waitForText("email", 15_000)
-  snap = snapshot()
+  click(emailOption, snap.refs[emailOption]?.name)
   shot("07-inline-saved")
-  if (!saved) {
+
+  // 4. the save must be VISIBLE in the cell, not merely "somewhere on the
+  // page": the definitions panel is still open here and its Options cell
+  // already renders "email, phone, event", so any page-text assertion on
+  // "email" passes even with the merge bug (QWB-52 review 3). Close the
+  // panel, re-snapshot, and require BOTH: the cell's edit button exists AND
+  // the options string is gone AND the bare value text is on the page.
+  const hideBtn = Object.entries(snapshot().refs).find(
+    ([, v]) => v.role === "button" && v.name === "Hide custom fields",
+  )?.[0]
+  if (hideBtn) {
+    click(hideBtn, "Hide custom fields")
+    await pause()
+  }
+  snap = snapshot()
+  const panelClosed = !snap.text.includes(CF_OPTIONS)
+  const cellBtn = Object.entries(snap.refs).find(
+    ([, v]) => v.role === "button" && v.name === `Edit ${CF_LABEL}`,
+  )?.[0]
+  const cellShowsValue = snap.text.includes("email")
+  if (!panelClosed || !cellBtn || !cellShowsValue) {
     shot("07-inline-RED", { full: true })
-    return record(name, "RED", "the chosen option did not appear in the cell", "07-inline-RED.png")
+    return record(
+      name,
+      "RED",
+      `cell after save: panel closed=${panelClosed}, edit button=${Boolean(cellBtn)}, value text=${cellShowsValue}`,
+      "07-inline-RED.png",
+    )
   }
 
-  // 4. delete the definition; the column disappears on the next metadata read
+  // 5. delete the definition; the column disappears on the next metadata
+  // read. The delete is a two-step confirm in the UI (QWB-52 review 17):
+  // the first click scans how many rows carry a value.
   await pause()
   snap = snapshot()
   const deleteBtn = Object.entries(snap.refs).find(
@@ -505,7 +527,17 @@ export async function scenarioCustomField() {
     shot("07-delete-RED", { full: true })
     return record(name, "RED", "delete button for the definition not found", "07-delete-RED.png")
   }
-  click(deleteBtn)
+  click(deleteBtn, snap.refs[deleteBtn]?.name)
+  await pause()
+  snap = snapshot()
+  const confirmBtn = Object.entries(snap.refs).find(
+    ([, v]) => v.role === "button" && v.name === `Confirm delete ${CF_LABEL}`,
+  )?.[0]
+  if (!confirmBtn) {
+    shot("07-delete-RED", { full: true })
+    return record(name, "RED", "the delete confirm step did not appear", "07-delete-RED.png")
+  }
+  click(confirmBtn, snap.refs[confirmBtn]?.name)
   // The column header must vanish from the snapshot.
   let columnGone = true
   const deadline = Date.now() + 15_000
@@ -520,9 +552,68 @@ export async function scenarioCustomField() {
     name,
     columnGone ? "PASS" : "RED",
     columnGone
-      ? "column appeared, was set inline, and disappeared after the definition was deleted"
+      ? "column appeared, was set inline, the saved value is in the cell, and it disappeared after the confirmed delete"
       : `column ${CF_LABEL} still present after delete; page text: ${snap.text.replace(/\s+/g, " ").slice(0, 300)}`,
     "07-column-gone.png",
+  )
+}
+
+// --- 8. the permission half (QWB-52 review 8) ------------------------------------
+// A reader (customfields:read only, no customfields:write) sees NO definitions
+// panel on the contacts list, and a direct call to the definition endpoints
+// answers 403 from qwbe. Runs AFTER the logout scenario: logging in as the
+// reader replaces the browser's session cookie, and the admin scenarios are
+// done by then.
+export async function scenarioReader(qwbePort) {
+  const name = "a reader sees no definitions panel and the definition API refuses the write"
+  await open("/login")
+  await settle("Sign in")
+  let snap = snapshot()
+  const userRef = refFor(snap.refs, "Username")
+  const passRef = refFor(snap.refs, "Password")
+  if (!userRef || !passRef) {
+    shot("08-reader-RED", { full: true })
+    return record(name, "RED", "login form fields not found for the reader", "08-reader-RED.png")
+  }
+  click(userRef, snap.refs[userRef]?.name)
+  type("reader")
+  click(passRef, snap.refs[passRef]?.name)
+  type("reader")
+  const submit = refFor(snap.refs, (n) => n === "Sign in")
+  click(submit, snap.refs[submit]?.name)
+  const landed = (await waitForUrl(".*/me.*")) && (await waitForText("Signed in as", 15_000))
+  if (!landed) {
+    shot("08-reader-RED", { full: true })
+    return record(name, "RED", "reader login did not land on the identity page", "08-reader-RED.png")
+  }
+  await open("/contacts")
+  await settle(CONTACT_LINKED)
+  snap = snapshot()
+  shot("08-reader-contacts")
+  const panelBtn = refFor(snap.refs, (n) => n === "Custom fields")
+  if (panelBtn) {
+    shot("08-reader-RED", { full: true })
+    return record(name, "RED", "the reader sees a Custom fields button", "08-reader-RED.png")
+  }
+  // Direct calls against qwbe itself, with a reader session of its own:
+  // qwbe must refuse the write, not the proxy.
+  const reader = qwbeClient(qwbePort)
+  await reader.login("reader", "reader")
+  const post = await reader.call("/customfields", {
+    method: "POST",
+    body: { targetCube: "crm/contacts", name: "readerProbe", fieldType: "text" },
+  })
+  const del = await reader.call("/customfields/whatever-id", { method: "DELETE" })
+  const list = await reader.call("/customfields?cube=crm/contacts&limit=5")
+  const refusalOk = post.status === 403 && del.status === 403
+  const readOk = list.status === 200
+  return record(
+    name,
+    refusalOk && readOk ? "PASS" : "RED",
+    refusalOk && readOk
+      ? `no panel for the reader; direct POST http ${post.status}, DELETE http ${del.status}, list http ${list.status}`
+      : `POST ${post.status}, DELETE ${del.status}, list ${list.status}`,
+    "08-reader-contacts.png",
   )
 }
 
@@ -545,5 +636,6 @@ export async function runAll(api, seed) {
   verdicts.push(await scenarioNavigation(seed))
   verdicts.push(await scenarioCustomField())
   verdicts.push(await scenarioLogout())
+  verdicts.push(await scenarioReader(CONFIG.qwbePort))
   return verdicts
 }

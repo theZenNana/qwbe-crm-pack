@@ -12,7 +12,7 @@
 
 import { execSync, spawnSync } from "node:child_process"
 import { createServer } from "node:net"
-import { cpSync, existsSync, mkdirSync, rmSync } from "node:fs"
+import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -125,6 +125,13 @@ for (const packDir of ["crm-pack", "customfields-pack"]) {
     })
   }
 }
+// The committed baseline inside the qwbe checkout is currently stale against
+// its own merged main, so the gate points at a written EMPTY baseline: the
+// file exists (the drift gate is visibly on, reading THIS path), it simply
+// records nothing, and the per-machine records in QWBE_DATA_DIR still catch
+// drift between runs. The staleness itself is reported, not hidden (QWB-52
+// review 19: the path must exist, not merely be named).
+writeFileSync(join(CONFIG.workDir, "empty-cube-versions.json"), "{}\n")
 log("== install dependencies (qwbe core) ==")
 // npm run propagates npm_config_* (including the global allow-scripts policy) into this
 // process; a project-scoped install rejects the flag, so strip it for the copy's install.
@@ -176,6 +183,32 @@ try {
   log("== seed ==")
   api = await makeClient(qwbePort)
   seed = await seedUp(api, log)
+  // Runtime proof that the custom-value fold is ON (QWB-52 review 6): the
+  // effect dedup above is load-bearing, and a second `effect` instance turns
+  // the fold off SILENTLY. This probe makes that failure loud instead of a
+  // comment: define a field, PATCH a value through the TARGET cube's own API,
+  // read the row back, and require the value under `custom`.
+  const probeDef = await api.call("/customfields", {
+    method: "POST",
+    body: { targetCube: "crm/contacts", name: "foldProbe", fieldType: "text" },
+  })
+  if (probeDef.status !== 200) {
+    fail(`fold probe: defining the probe field failed http ${probeDef.status}: ${JSON.stringify(probeDef.body).slice(0, 300)}`)
+  }
+  const probeRow = (await api.call("/contacts?limit=1")).body?.rows?.[0]
+  const probePatch = await api.call(`/contacts/${probeRow.id}`, {
+    method: "PATCH",
+    body: { foldProbe: "fold-probe-on" },
+  })
+  const probeBack = (await api.call(`/contacts/${probeRow.id}`)).body
+  await api.call(`/customfields/${probeDef.body.id}`, { method: "DELETE" })
+  if (probePatch.status !== 200 || probeBack?.custom?.foldProbe !== "fold-probe-on") {
+    fail(
+      `custom-value fold is OFF: PATCH http ${probePatch.status}, read back ` +
+        `${JSON.stringify(probeBack?.custom).slice(0, 200)} — a second effect instance turns the fold off silently`,
+    )
+  }
+  log("fold probe: the custom value round-trips through the target row's own API")
 } catch (e) {
   // No session means no seed and no authenticated scenarios. Do not fake green: run the
   // login scenario anyway (it drives the real UI and screenshots the refusal), skip the
@@ -224,7 +257,7 @@ try {
     scenarioError ? `Runner error after scenarios started: ${scenarioError.message}` : "",
   ].filter(Boolean))
 
-  const reds = results.filter((r) => r.verdict !== "PASS")
+  const reds = results.filter((r) => !r.verdict.startsWith("PASS"))
   if (scenarioError) {
     console.error(`\nE2E FAIL: runner error: ${scenarioError.stack}`)
     process.exit(1)
