@@ -7,19 +7,15 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { qwbeFetch } from "@/lib/qwbe"
 
-import { fetchMe } from "./fetch-me"
-
-function ConfigError() {
+function Unavailable({ message }: { message: string }) {
   return (
     <main className="flex min-h-svh items-center justify-center p-4">
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <CardTitle>Server configuration error</CardTitle>
-          <CardDescription>
-            QWBE_API_URL is not set; the identity of the signed-in user cannot
-            be verified.
-          </CardDescription>
+          <CardTitle>Identity unavailable</CardTitle>
+          <CardDescription>{message}</CardDescription>
         </CardHeader>
       </Card>
     </main>
@@ -27,17 +23,16 @@ function ConfigError() {
 }
 
 export default async function MePage() {
-  const apiBase = process.env.QWBE_API_URL
-  if (!apiBase) return <ConfigError />
-
-  const result = await fetchMe(apiBase)
-  if (!result.ok) {
-    // A dead token rides on every /api call until it is cleared, so an
-    // expired session goes through the logout handler (GET clears the
-    // cookie) before landing on /login.
-    redirect(result.expired ? "/api/logout" : "/login")
+  // Same function the proxy uses: it reads the cookie and attaches the header.
+  const result = await qwbeFetch("auth/me")
+  if (result.clearCookie) {
+    // A dead token rides on every later call until it is cleared, and a server
+    // component cannot write a cookie, so the logout handler clears it on the
+    // way to /login.
+    redirect("/api/logout")
   }
-  const me = result.me
+  if (result.status !== 200) return <Unavailable message={result.body} />
+  const me = JSON.parse(result.body) as Record<string, unknown>
 
   return (
     // flex-1, not min-h-svh: the nav above is part of the page now, and a full
