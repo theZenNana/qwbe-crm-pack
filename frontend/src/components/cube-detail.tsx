@@ -101,9 +101,13 @@ export function CubeDetail({
                         id={String(value)}
                       />
                     ) : field.type === "boolean" ? (
-                      value
-                        ? "yes"
-                        : "no"
+                      value === null || value === undefined ? (
+                        "—"
+                      ) : value ? (
+                        "yes"
+                      ) : (
+                        "no"
+                      )
                     ) : (
                       (value ?? "—")?.toString()
                     )}
@@ -117,7 +121,7 @@ export function CubeDetail({
       {childLists.map((child) => (
         <section key={child.cube} className="flex flex-col gap-2">
           <h2 className="text-lg font-semibold">{child.label ?? child.cube}</h2>
-          <CubeList cube={child.cube} fixedFilters={{ [child.field]: id }} />
+          <CubeList cube={child.cube} fixedFilters={{ [child.field]: id }} topLevel={false} />
           <Link className="text-sm underline" href={routeOf(child.cube)}>
             All rows
           </Link>

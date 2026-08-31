@@ -251,6 +251,13 @@ export function titleOf(meta: CubeMetadata, row: Row): string {
 // to the raw id when either request fails -- a cell never blocks on it.
 const metaCache = new Map<string, CubeMetadata>()
 
+// A definition change re-publishes the target cube's metadata; a relation
+// resolved before the change must not keep serving the stale field list for
+// the rest of the session. The panel's onChanged path calls this.
+export function clearRelationMetaCache(): void {
+  metaCache.clear()
+}
+
 export async function resolveRelationTitle(
   target: string,
   id: string,
@@ -301,14 +308,21 @@ export type SaveResult =
 // without a DOM: PATCHes exactly the edited key, merges ONLY that key from the
 // response (an out-of-order stale body must not overwrite newer columns), and
 // returns qwbe's own message -- matched to the edited field -- on refusal.
+//
+// The pre-edit value is derived HERE, from the row and the field, via the same
+// customValueOf the cell renders with. A caller cannot hand in a "current": a
+// custom field's value lives in the row's `custom` sub-object, and a caller
+// that reads the top level always passes `undefined` -- which would make an
+// empty save look like a no-op and skip the request entirely.
 export async function saveCell(opts: {
   rowPath: string
+  row: Row
   field: FieldMetadata
-  current: unknown
   next: string
   doFetch: typeof fetch
 }): Promise<SaveResult> {
-  const { rowPath, field, current, next, doFetch } = opts
+  const { rowPath, row, field, next, doFetch } = opts
+  const current = customValueOf(row, field)
   if (next === String(current ?? "")) return { status: "unchanged" }
   // One path for static AND custom fields: a custom field is saved through the
   // TARGET cube's own PATCH, the kernel folds the undeclared key into the

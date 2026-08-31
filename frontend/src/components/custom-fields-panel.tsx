@@ -18,6 +18,8 @@ import {
   canDefineFields,
   errorBody,
   errorMessage,
+  httpPrefixOf,
+  type Row,
 } from "@/lib/cube"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -46,9 +48,44 @@ import {
   TableRow,
 } from "@/components/ui/table"
 
-// The definition types the customfields pack accepts. Published back into the
-// target cube's metadata with the type mapping in qwbe's catalogue.
-const FIELD_TYPES = ["text", "number", "date", "bool", "select"] as const
+// The definition types the customfields pack accepts. NOT restated here as a
+// frozen copy: the pack publishes them in its OpenAPI document (the create
+// schema's fieldType literal union), read at first open. The fallback list is
+// only what the panel shows when that document cannot be read.
+const FIELD_TYPES_FALLBACK = ["text", "number", "date", "bool", "select"]
+
+// One fetch, one parse, shared by every panel on the page.
+let openApiTypes: Promise<string[]> | null = null
+const acceptedFieldTypes = (): Promise<string[]> => {
+  openApiTypes ??= fetch("/api/qwbe/openapi.json")
+    .then(async (r) => {
+      if (!r.ok) throw new Error(`openapi request failed: ${r.status}`)
+      const spec = (await r.json()) as {
+        components?: { schemas?: Record<string, { properties?: Record<string, unknown> }> }
+      }
+      const ft = spec.components?.schemas?.CustomFieldCreate?.properties?.fieldType as
+        | { enum?: unknown; anyOf?: { const?: unknown }[]; oneOf?: { const?: unknown }[] }
+        | undefined
+      const fromEnum = Array.isArray(ft?.enum) ? (ft?.enum as unknown[]).map(String) : []
+      const fromAnyOf = (ft?.anyOf ?? []).map((x) => String(x.const)).filter(Boolean)
+      const fromOneOf = (ft?.oneOf ?? []).map((x) => String(x.const)).filter(Boolean)
+      const types = fromEnum.length > 0 ? fromEnum : fromAnyOf.length > 0 ? fromAnyOf : fromOneOf
+      if (types.length === 0) throw new Error("openapi publishes no fieldType enum")
+      return types
+    })
+    .catch(() => FIELD_TYPES_FALLBACK)
+  return openApiTypes
+}
+
+// The permission check is shared too: every CubeList would otherwise fire its
+// own /auth/me per panel.
+let meCheck: Promise<{ permissions?: string[] } | null> | null = null
+const myPermissions = (): Promise<{ permissions?: string[] } | null> => {
+  meCheck ??= fetch("/api/qwbe/auth/me")
+    .then(async (r) => (r.ok ? ((await r.json()) as { permissions?: string[] }) : null))
+    .catch(() => null)
+  return meCheck
+}
 
 // One definition as the customfields list endpoint returns it (a row of the
 // pack's own table; deleted definitions are soft-deleted and filtered here).
@@ -66,6 +103,7 @@ export type CustomFieldDef = {
 export function CustomFieldsPanel({
   cube,
   onChanged,
+  rendered = true,
 }: {
   // The full cube name the definitions target, e.g. "crm/contacts".
   cube: string
@@ -73,8 +111,12 @@ export function CustomFieldsPanel({
   // the cube's metadata and the new column appears (or the old one disappears)
   // without a page reload.
   onChanged: () => void
+  // False for an embedded child list: the component then renders nothing, so
+  // a detail page shows exactly one panel.
+  rendered?: boolean
 }) {
   const [allowed, setAllowed] = useState<boolean | null>(null)
+  const [fieldTypes, setFieldTypes] = useState<string[] | null>(null)
   const [open, setOpen] = useState(false)
   const [defs, setDefs] = useState<CustomFieldDef[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -83,8 +125,10 @@ export function CustomFieldsPanel({
   // nothing, whatever else it would have fetched.
   useEffect(() => {
     let alive = true
-    fetch("/api/qwbe/auth/me")
-      .then(async (r) => (r.ok ? ((await r.json()) as { permissions?: string[] }) : null))
+    // An embedded (rendered=false) panel fetches nothing at all; the render
+    // guard below already shows nothing for it.
+    if (!rendered) return undefined
+    myPermissions()
       .then((me) => {
         if (alive) setAllowed(canDefineFields(me?.permissions ?? []))
       })
@@ -94,13 +138,28 @@ export function CustomFieldsPanel({
     return () => {
       alive = false
     }
-  }, [])
+  }, [rendered])
+
+  // The accepted types come from the pack's own published schema, once.
+  useEffect(() => {
+    let alive = true
+    if (!rendered) return
+    acceptedFieldTypes().then((types) => {
+      if (alive) setFieldTypes(types)
+    })
+    return () => {
+      alive = false
+    }
+  }, [rendered])
 
   const loadDefs = useCallback(() => {
     let alive = true
+    const stop = () => {
+      alive = false
+    }
     fetch(`/api/qwbe/customfields?cube=${encodeURIComponent(cube)}&limit=200`)
       .then(async (r) => {
-        if (!r.ok) throw new Error(`definitions request failed: ${r.status}`)
+        if (!r.ok) throw new Error(errorMessage(await errorBody(r)))
         return (await r.json()) as { rows?: CustomFieldDef[] }
       })
       .then((p) => {
@@ -110,16 +169,14 @@ export function CustomFieldsPanel({
       .catch((e: unknown) => {
         if (alive) setError(e instanceof Error ? e.message : String(e))
       })
-    return () => {
-      alive = false
-    }
+    return stop
   }, [cube])
 
-  useEffect(() => {
-    if (open) loadDefs()
-  }, [open, loadDefs])
+  // The cleanup is returned for real: an unmount while the list is in flight
+  // must not set state on a dead component.
+  useEffect(() => (open ? loadDefs() : undefined), [open, loadDefs])
 
-  if (allowed === null || !allowed) return null
+  if (!rendered || allowed === null || !allowed) return null
 
   return (
     <div className="flex flex-col gap-2">
@@ -164,6 +221,8 @@ export function CustomFieldsPanel({
                       <DeleteButton
                         id={d.id}
                         name={d.label || d.name}
+                        cube={cube}
+                        fieldName={d.name}
                         onDeleted={() => {
                           setError(null)
                           loadDefs()
@@ -185,6 +244,7 @@ export function CustomFieldsPanel({
             </Table>
             <DefineForm
               cube={cube}
+              fieldTypes={fieldTypes ?? FIELD_TYPES_FALLBACK}
               onDefined={() => {
                 setError(null)
                 loadDefs()
@@ -202,36 +262,92 @@ export function CustomFieldsPanel({
 function DeleteButton({
   id,
   name,
+  cube,
+  fieldName,
   onDeleted,
   onError,
 }: {
   id: string
   name: string
+  cube: string
+  fieldName: string
   onDeleted: () => void
   onError: (message: string) => void
 }) {
   const [busy, setBusy] = useState(false)
+  // Deleting a definition is irreversible from this UI and orphans every
+  // stored value, so the first click only SCANS and asks: how many rows in
+  // the first 200 of the target carry a value, which this delete would leave
+  // behind as orphans (the pack's orphan report surfaces them afterwards).
+  const [confirming, setConfirming] = useState<number | null>(null)
+  const beginConfirm = async () => {
+    setBusy(true)
+    try {
+      const r = await fetch(`/api/qwbe/${httpPrefixOf(cube)}?limit=200`)
+      let carrying = 0
+      if (r.ok) {
+        const p = (await r.json()) as { rows?: Row[] }
+        carrying = (p.rows ?? []).filter((row) => {
+          const custom = row.custom
+          const v = custom && typeof custom === "object" ? (custom as Row)[fieldName] : undefined
+          return v !== undefined && v !== null && v !== ""
+        }).length
+      }
+      setConfirming(carrying)
+    } finally {
+      setBusy(false)
+    }
+  }
+  if (confirming !== null) {
+    return (
+      <span className="flex items-center gap-1">
+        <span className="text-xs text-muted-foreground">
+          {confirming} row(s) in the first 200 carry a value; they become orphans.
+        </span>
+        <Button
+          variant="destructive"
+          size="sm"
+          disabled={busy}
+          aria-label={`Confirm delete ${name}`}
+          onClick={async () => {
+            setBusy(true)
+            try {
+              const r = await fetch(`/api/qwbe/customfields/${encodeURIComponent(id)}`, {
+                method: "DELETE",
+              })
+              if (!r.ok) {
+                onError(errorMessage(await errorBody(r)))
+                setConfirming(null)
+              } else {
+                setConfirming(null)
+                onDeleted()
+              }
+            } finally {
+              setBusy(false)
+            }
+          }}
+        >
+          Confirm delete
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={busy}
+          aria-label={`Cancel delete ${name}`}
+          onClick={() => setConfirming(null)}
+        >
+          Cancel
+        </Button>
+      </span>
+    )
+  }
   return (
     <Button
       variant="destructive"
       size="sm"
       disabled={busy}
       aria-label={`Delete ${name}`}
-      onClick={async () => {
-        setBusy(true)
-        try {
-          const r = await fetch(`/api/qwbe/customfields/${encodeURIComponent(id)}`, {
-            method: "DELETE",
-          })
-          if (!r.ok) {
-            onError(errorMessage(await errorBody(r)))
-          } else {
-            onDeleted()
-          }
-        } finally {
-          setBusy(false)
-        }
-      }}
+      onClick={beginConfirm}
     >
       Delete
     </Button>
@@ -243,10 +359,12 @@ function DeleteButton({
 // no permission) is answered with qwbe's own message.
 function DefineForm({
   cube,
+  fieldTypes,
   onDefined,
   onError,
 }: {
   cube: string
+  fieldTypes: string[]
   onDefined: () => void
   onError: (message: string) => void
 }) {
@@ -326,7 +444,7 @@ function DefineForm({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {FIELD_TYPES.map((t) => (
+              {fieldTypes.map((t) => (
                 <SelectItem key={t} value={t}>
                   {t}
                 </SelectItem>

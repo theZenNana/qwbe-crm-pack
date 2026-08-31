@@ -228,8 +228,8 @@ describe("saving an inline edit", () => {
     patchCalls.length = 0
     const result = await saveCell({
       rowPath: "/api/qwbe/accounts/acc-1",
+      row: { id: "acc-1", name: "Old" } as Row,
       field: field({ name: "name" }),
-      current: "Old",
       next: "Renamed",
       doFetch: okFetch,
     })
@@ -249,8 +249,8 @@ describe("saving an inline edit", () => {
     patchCalls.length = 0
     const result = await saveCell({
       rowPath: "/api/qwbe/accounts/acc-1",
+      row: { id: "acc-1", name: "Same" } as Row,
       field: field({ name: "name" }),
-      current: "Same",
       next: "Same",
       doFetch: okFetch,
     })
@@ -272,8 +272,8 @@ describe("saving an inline edit", () => {
       )) as unknown as typeof fetch
     const result = await saveCell({
       rowPath: "/api/qwbe/accounts/acc-1",
+      row: { id: "acc-1", name: "Old" } as Row,
       field: field({ name: "name" }),
-      current: "Old",
       next: "",
       doFetch: refusedFetch,
     })
@@ -469,13 +469,64 @@ describe("a required custom field refuses an empty save with qwbe's own message"
     try {
       const result = await saveCell({
         rowPath: "/api/qwbe/contacts/row-1",
+        // The current value is DERIVED from the row: a custom field's value
+        // lives in the row's `custom` sub-object, exactly as the component
+        // passes the whole row in. Handing in a hand-picked `current` would
+        // test a value the real caller can never produce.
+        row: { id: "row-1", name: "Dana", custom: { lead_source: "email" } } as Row,
         field: customField({ required: true }),
-        current: "email",
         next: "",
         doFetch: globalThis.fetch,
       })
       assert.equal(result.status, "refused")
       assert.equal(result.status === "refused" && result.message, backendMessage)
+    } finally {
+      globalThis.fetch = realFetch
+    }
+  })
+
+  it("an empty save on a custom field that was never set is a no-op, not a PATCH (the blocker-1 short-circuit)", async () => {
+    const realFetch = globalThis.fetch
+    let called = false
+    globalThis.fetch = (async () => {
+      called = true
+      return new Response("{}", { status: 200 })
+    }) as unknown as typeof fetch
+    try {
+      const result = await saveCell({
+        rowPath: "/api/qwbe/contacts/row-1",
+        row: { id: "row-1", name: "Dana" } as Row,
+        field: customField({ required: true }),
+        next: "",
+        doFetch: globalThis.fetch,
+      })
+      assert.equal(result.status, "unchanged")
+      assert.equal(called, false)
+    } finally {
+      globalThis.fetch = realFetch
+    }
+  })
+
+  it("clearing a SET required custom field is a real change: the PATCH leaves the client (QWB-52 review 1)", async () => {
+    const realFetch = globalThis.fetch
+    let called = false
+    let sentBody: unknown
+    globalThis.fetch = (async (_url: RequestInfo | URL, init?: RequestInit) => {
+      called = true
+      sentBody = JSON.parse(String(init?.body))
+      return new Response(JSON.stringify({ message: "refused" }), { status: 400 })
+    }) as unknown as typeof fetch
+    try {
+      const result = await saveCell({
+        rowPath: "/api/qwbe/contacts/row-1",
+        row: { id: "row-1", name: "Dana", custom: { lead_source: "email" } } as Row,
+        field: customField({ required: true }),
+        next: "",
+        doFetch: globalThis.fetch,
+      })
+      assert.equal(called, true)
+      assert.deepEqual(sentBody, { lead_source: "" })
+      assert.equal(result.status, "refused")
     } finally {
       globalThis.fetch = realFetch
     }
@@ -493,8 +544,8 @@ describe("a required custom field refuses an empty save with qwbe's own message"
     try {
       const result = await saveCell({
         rowPath: "/api/qwbe/contacts/row-1",
+        row: { id: "row-1", name: "Dana", custom: { lead_source: "email" } } as Row,
         field: customField({ enum: ["email", "phone"] }),
-        current: "email",
         next: "phone",
         doFetch: globalThis.fetch,
       })
