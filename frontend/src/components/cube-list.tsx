@@ -14,6 +14,7 @@ import Link from "next/link"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import {
+  apiFetch,
   type ColumnSpec,
   type CubeMetadata,
   type FieldMetadata,
@@ -112,7 +113,7 @@ export function CubeList({
 
   useEffect(() => {
     let alive = true
-    fetch(metadataApiPath(cube))
+    apiFetch(metadataApiPath(cube))
       .then(async (r) => {
         if (!r.ok) throw new Error(`metadata request failed: ${r.status}`)
         return (await r.json()) as CubeMetadata
@@ -142,7 +143,7 @@ export function CubeList({
 
   const load = useCallback(() => {
     let alive = true
-    fetch(listApiPath(cube, { offset, limit: PAGE_SIZE, sortBy, descending, filters: effectiveFilters }))
+    apiFetch(listApiPath(cube, { offset, limit: PAGE_SIZE, sortBy, descending, filters: effectiveFilters }))
       .then(async (r) => {
         if (!r.ok) throw new Error(`list request failed: ${r.status}`)
         return (await r.json()) as PageOf<Row>
@@ -201,7 +202,7 @@ export function CubeList({
       row,
       field: fieldMeta,
       next,
-      doFetch: fetch,
+      doFetch: apiFetch,
     })
     if (result.status === "saved") {
       // Only the patched key is merged: a concurrent, out-of-order response
@@ -402,10 +403,10 @@ function RelationSearch({
   useEffect(() => {
     let alive = true
     Promise.all([
-      fetch(metadataApiPath(target))
+      apiFetch(metadataApiPath(target))
         .then(async (r) => (r.ok ? ((await r.json()) as CubeMetadata) : null))
         .catch(() => null),
-      fetch(listApiPath(target, { offset: 0, limit: 200 }))
+      apiFetch(listApiPath(target, { offset: 0, limit: 200 }))
         .then(async (r) => (r.ok ? ((await r.json()) as PageOf<Row>) : null))
         .catch(() => null),
     ]).then(([m, p]) => {

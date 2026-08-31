@@ -99,6 +99,31 @@ export function httpPrefixOf(cube: string): string {
   return cube.includes("/") ? cube.split("/").pop()! : cube
 }
 
+// The browser's single reaction to a 401 from the proxy: the session is dead
+// and the proxy already cleared the cookie on the way out, so leave for /login
+// with this page as the destination. Painting the status into the page instead
+// ("list request failed: 401") left the person on a view that could never
+// recover until they typed /login themselves (QWB-54).
+// Same signature as fetch, so it drops in wherever a `typeof fetch` is asked for.
+export async function apiFetch(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<Response> {
+  const response = await fetch(input, init)
+  if (response.status === 401 && typeof window !== "undefined") {
+    const here = window.location.pathname + window.location.search
+    // replace, not push: the page we are leaving cannot be rendered without a
+    // session, so Back must not return to it. A full document load (not a
+    // router push) is deliberate -- it drops the client state of a dead
+    // session and lets the middleware see the cleared cookie.
+    window.location.replace(`/login?next=${encodeURIComponent(here)}`)
+    // Never resolves: the caller must not render an error over a page that is
+    // already navigating away.
+    await new Promise(() => undefined)
+  }
+  return response
+}
+
 // Proxy path for a cube-relative qwbe path: the cube "crm/accounts" becomes
 // /api/qwbe/accounts, because that is the prefix the cube actually serves at.
 export function cubeApiPath(cube: string, suffix = ""): string {
@@ -261,7 +286,7 @@ export function clearRelationMetaCache(): void {
 export async function resolveRelationTitle(
   target: string,
   id: string,
-  doFetch: typeof fetch = fetch,
+  doFetch: typeof fetch = apiFetch,
 ): Promise<string> {
   try {
     let meta = metaCache.get(target)

@@ -9,6 +9,7 @@ import Link from "next/link"
 import { useEffect, useState } from "react"
 
 import {
+  apiFetch,
   type CubeMetadata,
   type Row,
   cubeApiPath,
@@ -48,11 +49,11 @@ export function CubeDetail({
   useEffect(() => {
     let alive = true
     Promise.all([
-      fetch(metadataApiPath(cube)).then(async (r) => {
+      apiFetch(metadataApiPath(cube)).then(async (r) => {
         if (!r.ok) throw new Error(`metadata request failed: ${r.status}`)
         return (await r.json()) as CubeMetadata
       }),
-      fetch(cubeApiPath(cube, `/${id}`)).then(async (r) => {
+      apiFetch(cubeApiPath(cube, `/${id}`)).then(async (r) => {
         if (!r.ok) throw new Error(`row request failed: ${r.status}`)
         return (await r.json()) as Row
       }),

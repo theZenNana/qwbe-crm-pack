@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useState } from "react"
 
 import {
+  apiFetch,
   canDefineFields,
   errorBody,
   errorMessage,
@@ -57,7 +58,7 @@ const FIELD_TYPES_FALLBACK = ["text", "number", "date", "bool", "select"]
 // One fetch, one parse, shared by every panel on the page.
 let openApiTypes: Promise<string[]> | null = null
 const acceptedFieldTypes = (): Promise<string[]> => {
-  openApiTypes ??= fetch("/api/qwbe/openapi.json")
+  openApiTypes ??= apiFetch("/api/qwbe/openapi.json")
     .then(async (r) => {
       if (!r.ok) throw new Error(`openapi request failed: ${r.status}`)
       const spec = (await r.json()) as {
@@ -81,7 +82,7 @@ const acceptedFieldTypes = (): Promise<string[]> => {
 // own /auth/me per panel.
 let meCheck: Promise<{ permissions?: string[] } | null> | null = null
 const myPermissions = (): Promise<{ permissions?: string[] } | null> => {
-  meCheck ??= fetch("/api/qwbe/auth/me")
+  meCheck ??= apiFetch("/api/qwbe/auth/me")
     .then(async (r) => (r.ok ? ((await r.json()) as { permissions?: string[] }) : null))
     .catch(() => null)
   return meCheck
@@ -157,7 +158,7 @@ export function CustomFieldsPanel({
     const stop = () => {
       alive = false
     }
-    fetch(`/api/qwbe/customfields?cube=${encodeURIComponent(cube)}&limit=200`)
+    apiFetch(`/api/qwbe/customfields?cube=${encodeURIComponent(cube)}&limit=200`)
       .then(async (r) => {
         if (!r.ok) throw new Error(errorMessage(await errorBody(r)))
         return (await r.json()) as { rows?: CustomFieldDef[] }
@@ -283,7 +284,7 @@ function DeleteButton({
   const beginConfirm = async () => {
     setBusy(true)
     try {
-      const r = await fetch(`/api/qwbe/${httpPrefixOf(cube)}?limit=200`)
+      const r = await apiFetch(`/api/qwbe/${httpPrefixOf(cube)}?limit=200`)
       let carrying = 0
       if (r.ok) {
         const p = (await r.json()) as { rows?: Row[] }
@@ -312,7 +313,7 @@ function DeleteButton({
           onClick={async () => {
             setBusy(true)
             try {
-              const r = await fetch(`/api/qwbe/customfields/${encodeURIComponent(id)}`, {
+              const r = await apiFetch(`/api/qwbe/customfields/${encodeURIComponent(id)}`, {
                 method: "DELETE",
               })
               if (!r.ok) {
@@ -382,7 +383,7 @@ function DefineForm({
         e.preventDefault()
         setBusy(true)
         try {
-          const r = await fetch("/api/qwbe/customfields", {
+          const r = await apiFetch("/api/qwbe/customfields", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({
