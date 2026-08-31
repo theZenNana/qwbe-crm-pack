@@ -183,9 +183,19 @@ export function refFor(refs, match) {
 const scrollNameIntoView = (name) => {
   const expr =
     `(() => { const want = ${JSON.stringify(name)};` +
-    ` const named = (el) => el.getAttribute("aria-label") || el.getAttribute("title") ||` +
-    ` (el.labels && el.labels[0] ? el.labels[0].textContent.trim() : "") || (el.textContent || "").trim();` +
-    ` const el = [...document.querySelectorAll("button, input, textarea, select, a, [role]")].find((e) => named(e) === want);` +
+    // Only controls: a table header or a cell can carry the same words as the
+    // control being clicked (the definitions panel has a "Required" column
+    // header above its "Required" checkbox), and scrolling that instead moves
+    // the real target out from under the click.
+    ` const controls = [...document.querySelectorAll("button, input, textarea, select, a[href], [role=checkbox], [role=combobox], [role=option], [role=textbox]")];` +
+    // The accessible name first (aria-label, the label that points at this id,
+    // a wrapping label, title); the visible text only as a last resort.
+    ` const byId = (el) => el.id ? document.querySelector('label[for="' + el.id + '"]') : null;` +
+    ` const accName = (el) => (el.getAttribute("aria-label") || "").trim() ||` +
+    ` (byId(el) ? byId(el).textContent.trim() : "") ||` +
+    ` (el.closest("label") ? el.closest("label").textContent.trim() : "") ||` +
+    ` (el.getAttribute("title") || "").trim();` +
+    ` const el = controls.find((e) => accName(e) === want) || controls.find((e) => (e.textContent || "").trim() === want);` +
     ` if (!el) return "not-found";` +
     ` const r = el.getBoundingClientRect();` +
     // Only move the page when the element is actually out of reach: scrolling

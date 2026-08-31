@@ -469,8 +469,9 @@ const CF_NAME = "e2eChannel"
 const CF_LABEL = "E2E Channel"
 const CF_OPTIONS = "email, phone, event"
 
-export async function scenarioCustomField() {
+export async function scenarioCustomField(api) {
   const name = "custom field defined in the UI appears, is set inline, and disappears on delete"
+  await dropDefinitions(api, "crm/contacts", [CF_NAME])
   await open("/contacts")
   await settle(CONTACT_LINKED)
   let snap = snapshot()
@@ -707,8 +708,15 @@ const D_LABEL = "E2E Start"
 const N_NAME = "e2eNote"
 const N_LABEL = "E2E Note"
 
-/** Define one field through the open panel; fresh snapshot for every step. */
-async function defineField(name, label, typeName, options) {
+/**
+ * Define one field through the open panel; fresh snapshot for every step.
+ *
+ * `required` ticks the panel's Required box before the field is added: the
+ * refusal this suite asserts on ("... is required and cannot be emptied")
+ * only exists for a field the definition actually marks required, and the
+ * panel starts every new field optional.
+ */
+async function defineField(name, label, typeName, options, required = false) {
   for (let i = 0; i < 20; i++) {
     const nameBox = await clickStable((v) => v.role === "textbox" && v.name === "Name", "Name")
     // The combobox is only LOOKED UP here: clicking it would move the focus
@@ -732,6 +740,22 @@ async function defineField(name, label, typeName, options) {
             if (optionsBox && (await clickStable((v) => v.role === "textbox" && /Options/.test(v.name ?? "")))) {
               type(options ?? "")
             }
+          }
+          if (required) {
+            const box = await clickStable((v) => v.role === "checkbox" && v.name === "Required", "Required")
+            if (!box) return false
+            await new Promise((r) => setTimeout(r, 300))
+            // A click that misses the checkbox would define an OPTIONAL field
+            // and quietly make the refusal assertion unprovable; read the box
+            // back instead of assuming the click landed.
+            const checked = orca(
+              "eval",
+              "--expression",
+              `(() => { const el = document.getElementById("cf-required");` +
+                ` return el ? String(el.getAttribute("aria-checked")) : "missing" })()`,
+              ...pageArgs(),
+            )
+            if (checked?.result !== "true") return false
           }
           const addBtn = await clickStable((v) => v.role === "button" && v.name === "Add field", "Add field")
           if (addBtn) {
@@ -790,8 +814,27 @@ async function deleteField(label) {
   return false
 }
 
+/**
+ * Delete any definition this suite left behind on a previous run.
+ *
+ * Definitions live in the same Postgres database across runs, and a scenario
+ * that goes RED never reaches its own delete step. The panel then refuses the
+ * duplicate (http 400) while the row it looks for is already on screen, so the
+ * next run silently reuses the OLD definition -- which is how an "emptied
+ * required field is refused" assertion ran against a field defined as
+ * optional, and could not pass no matter what the app did.
+ */
+async function dropDefinitions(api, cube, names) {
+  const r = await api.call(`/customfields?cube=${encodeURIComponent(cube)}&limit=200`)
+  const rows = Array.isArray(r.body?.rows) ? r.body.rows : Array.isArray(r.body) ? r.body : []
+  for (const row of rows) {
+    if (names.includes(row.name)) await api.call(`/customfields/${row.id}`, { method: "DELETE" })
+  }
+}
+
 export async function scenarioCustomFieldTypes(api, seed) {
   const name = "bool, number and date custom fields set inline; an emptied required text field is refused"
+  await dropDefinitions(api, "crm/contacts", [V_NAME, B_NAME, D_NAME, N_NAME])
   await open("/contacts")
   await settle(CONTACT_LINKED)
   let snap = snapshot()
@@ -806,13 +849,15 @@ export async function scenarioCustomFieldTypes(api, seed) {
   }
 
   const failures = []
-  for (const [n, l, t, o] of [
-    [V_NAME, V_LABEL, "number", null],
-    [B_NAME, B_LABEL, "bool", null],
-    [D_NAME, D_LABEL, "date", null],
-    [N_NAME, N_LABEL, "text", null],
+  for (const [n, l, t, o, req] of [
+    [V_NAME, V_LABEL, "number", null, false],
+    [B_NAME, B_LABEL, "bool", null, false],
+    [D_NAME, D_LABEL, "date", null, false],
+    // The note is the required one: the scenario empties it and asserts on
+    // qwbe's own refusal, which an optional field would never produce.
+    [N_NAME, N_LABEL, "text", null, true],
   ]) {
-    if (!(await defineField(n, l, t, o))) failures.push(`define ${n} failed`)
+    if (!(await defineField(n, l, t, o, req))) failures.push(`define ${n} failed`)
   }
   if (failures.length > 0) {
     shot("09-define-RED", { full: true })
@@ -973,7 +1018,7 @@ export async function runAll(api, seed) {
   verdicts.push(await scenarioInlineEdit())
   verdicts.push(await scenarioNonEditable(api))
   verdicts.push(await scenarioNavigation(seed))
-  verdicts.push(await scenarioCustomField())
+  verdicts.push(await scenarioCustomField(api))
   verdicts.push(await scenarioCustomFieldTypes(api, seed))
   verdicts.push(await scenarioLogout())
   verdicts.push(await scenarioReader(CONFIG.qwbePort))
