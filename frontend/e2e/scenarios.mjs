@@ -653,12 +653,16 @@ export async function scenarioCustomField(api) {
     await new Promise((r) => setTimeout(r, 500))
   }
   shot("07-column-gone")
+  // The delete is a write too: a header vanishing from the page is not proof
+  // qwbe dropped the definition. Read the definitions back.
+  const stillDefined = (await definitionRows(api, "crm/contacts")).some((r) => r.name === CF_NAME)
+  const deleted = columnGone && !stillDefined
   return record(
     name,
-    columnGone ? "PASS" : "RED",
-    columnGone
-      ? "column appeared, was set inline, the saved value is in the cell, and it disappeared after the confirmed delete"
-      : `column ${CF_LABEL} still present after delete; page text: ${snap.text.replace(/\s+/g, " ").slice(0, 300)}`,
+    deleted ? "PASS" : "RED",
+    deleted
+      ? "column appeared, was set inline, the saved value is in the cell and in the backend, and the definition is gone from both after the confirmed delete"
+      : `after delete: column gone=${columnGone}, still defined in qwbe=${stillDefined}; page text: ${snap.text.replace(/\s+/g, " ").slice(0, 300)}`,
     "07-column-gone.png",
   )
 }
@@ -852,11 +856,15 @@ async function deleteField(label) {
  * optional, and could not pass no matter what the app did.
  */
 async function dropDefinitions(api, cube, names) {
-  const r = await api.call(`/customfields?cube=${encodeURIComponent(cube)}&limit=200`)
-  const rows = Array.isArray(r.body?.rows) ? r.body.rows : Array.isArray(r.body) ? r.body : []
-  for (const row of rows) {
+  for (const row of await definitionRows(api, cube)) {
     if (names.includes(row.name)) await api.call(`/customfields/${row.id}`, { method: "DELETE" })
   }
+}
+
+/** The definitions qwbe itself holds for `cube` -- the only proof a UI delete landed. */
+async function definitionRows(api, cube) {
+  const r = await api.call(`/customfields?cube=${encodeURIComponent(cube)}&limit=200`)
+  return Array.isArray(r.body?.rows) ? r.body.rows : Array.isArray(r.body) ? r.body : []
 }
 
 export async function scenarioCustomFieldTypes(api, seed) {
@@ -1017,13 +1025,19 @@ export async function scenarioCustomFieldTypes(api, seed) {
     (await deleteField(D_LABEL)) &&
     (await deleteField(N_LABEL))
 
-  const pass = ok && helloShown && refused && valueOk && cleaned && dateShown
+  // The deletes are writes as well: rows disappearing from the panel is not
+  // proof. None of the four may still be defined in qwbe.
+  const leftOver = (await definitionRows(api, "crm/contacts"))
+    .map((r) => r.name)
+    .filter((n) => [V_NAME, B_NAME, D_NAME, N_NAME].includes(n))
+
+  const pass = ok && helloShown && refused && valueOk && cleaned && dateShown && leftOver.length === 0
   return record(
     name,
     pass ? "PASS" : "RED",
     pass
-      ? "number 7, bool yes, date 2026-01-02 in the cells and the backend; the emptied required field refused with qwbe's message"
-      : `${noteDetail} values=${JSON.stringify(custom).slice(0, 120)} cleaned=${cleaned} date=${dateShown}`,
+      ? "number 7, bool yes, date 2026-01-02 in the cells and the backend; the emptied required field refused with qwbe's message; every definition gone from qwbe"
+      : `${noteDetail} values=${JSON.stringify(custom).slice(0, 120)} cleaned=${cleaned} date=${dateShown} leftOver=${leftOver.join(",") || "none"}`,
     "09-required-refused.png",
   )
 }
