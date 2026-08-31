@@ -34,6 +34,7 @@ import {
   type FieldMetadata,
   type PageOf,
   type Row,
+  pageWindow,
 } from "./cube.ts"
 
 const field = (over: Partial<FieldMetadata> = {}): FieldMetadata => ({
@@ -565,5 +566,19 @@ describe("the definitions panel follows the permission", () => {
 
   it("a user with customfields:write gets the panel", () => {
     assert.equal(canDefineFields(["customfields:write"]), true)
+  })
+})
+
+describe("pageWindow", () => {
+  it("counts pages from the offset and the page size", () => {
+    assert.deepEqual(pageWindow(0, 25, 60000), { currentPage: 1, lastPage: 2400 })
+    assert.deepEqual(pageWindow(75, 25, 60000), { currentPage: 4, lastPage: 2400 })
+    // A bigger page size means fewer pages for the same rows.
+    assert.deepEqual(pageWindow(0, 200, 60000), { currentPage: 1, lastPage: 300 })
+  })
+
+  it("has one page for an empty cube and none at all without a total", () => {
+    assert.deepEqual(pageWindow(0, 25, 0), { currentPage: 1, lastPage: 1 })
+    assert.deepEqual(pageWindow(50, 25, undefined), { currentPage: 3, lastPage: undefined })
   })
 })

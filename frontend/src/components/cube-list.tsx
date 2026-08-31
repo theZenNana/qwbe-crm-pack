@@ -29,6 +29,7 @@ import {
   rowHref,
   listApiPath,
   metadataApiPath,
+  pageWindow,
   clearRelationMetaCache,
   resolveRelationTitle,
   saveCell,
@@ -56,7 +57,9 @@ import {
   TableRow,
 } from "@/components/ui/table"
 
-const PAGE_SIZE = 25
+// The page sizes the size picker offers; the first is the default. 200 is qwbe's
+// MAX_LIMIT, so nothing larger can be asked for.
+const PAGE_SIZES = [25, 50, 100, 200]
 
 type EditState = { id: string; field: string; value: string }
 
@@ -80,6 +83,7 @@ export function CubeList({
   const [page, setPage] = useState<PageOf<Row> | null>(null)
   const [listError, setListError] = useState<string | null>(null)
   const [offset, setOffset] = useState(0)
+  const [pageSize, setPageSize] = useState(PAGE_SIZES[0])
   const [sortBy, setSortBy] = useState<string | undefined>(undefined)
   const [descending, setDescending] = useState(false)
   // The chosen values of the searchable fields, keyed by field name; empty
@@ -143,7 +147,7 @@ export function CubeList({
 
   const load = useCallback(() => {
     let alive = true
-    apiFetch(listApiPath(cube, { offset, limit: PAGE_SIZE, sortBy, descending, filters: effectiveFilters }))
+    apiFetch(listApiPath(cube, { offset, limit: pageSize, sortBy, descending, filters: effectiveFilters }))
       .then(async (r) => {
         if (!r.ok) throw new Error(`list request failed: ${r.status}`)
         return (await r.json()) as PageOf<Row>
@@ -157,7 +161,7 @@ export function CubeList({
     return () => {
       alive = false
     }
-  }, [cube, offset, sortBy, descending, effectiveFilters])
+  }, [cube, offset, pageSize, sortBy, descending, effectiveFilters])
 
   useEffect(() => load(), [load])
 
@@ -172,6 +176,7 @@ export function CubeList({
   const searchableFields = meta.fields.filter((f) => f.searchable)
   const total = page?.total
   const rowCount = page?.rows.length ?? 0
+  const { currentPage, lastPage } = pageWindow(offset, pageSize, total)
 
   // A stale cell error must not survive a change of page, sort or filter: the
   // row it was about is not the row in view any more. Every entry point below
@@ -332,25 +337,67 @@ export function CubeList({
               : `${page.offset + 1}-${page.offset + rowCount}`
             : "loading"}
         </span>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
           <Button
             variant="outline"
             size="sm"
             disabled={offset === 0}
-            onClick={() => requery(() => setOffset(Math.max(0, offset - PAGE_SIZE)))}
+            onClick={() => requery(() => setOffset(Math.max(0, offset - pageSize)))}
           >
             Previous
           </Button>
+          {/* 2400 pages of Previous/Next is not navigation: the page number is
+              typed, and clamped to the last page whenever qwbe reports a total. */}
+          <label className="flex items-center gap-1 text-sm text-muted-foreground">
+            Page
+            <Input
+              type="number"
+              min={1}
+              max={lastPage}
+              className="w-20"
+              aria-label="Page"
+              value={currentPage}
+              onChange={(e) => {
+                const wanted = Number(e.target.value)
+                if (!Number.isFinite(wanted) || wanted < 1) return
+                const clamped = lastPage === undefined ? wanted : Math.min(wanted, lastPage)
+                requery(() => setOffset((clamped - 1) * pageSize))
+              }}
+            />
+            {lastPage !== undefined && <span>of {lastPage}</span>}
+          </label>
           <Button
             variant="outline"
             size="sm"
             // Without a total from qwbe, a short page is the only proof that
             // the end was reached.
-            disabled={!page || (total !== undefined ? offset + PAGE_SIZE >= total : rowCount < PAGE_SIZE)}
-            onClick={() => requery(() => setOffset(offset + PAGE_SIZE))}
+            disabled={!page || (total !== undefined ? offset + pageSize >= total : rowCount < pageSize)}
+            onClick={() => requery(() => setOffset(offset + pageSize))}
           >
             Next
           </Button>
+          <Select
+            value={String(pageSize)}
+            onValueChange={(v) =>
+              requery(() => {
+                setPageSize(Number(v))
+                // The row that was first on the old page stays visible: keep
+                // the offset, only snapped to the new page boundary.
+                setOffset(Math.floor(offset / Number(v)) * Number(v))
+              })
+            }
+          >
+            <SelectTrigger className="w-28" aria-label="Rows per page">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {PAGE_SIZES.map((n) => (
+                <SelectItem key={n} value={String(n)}>
+                  {n} / page
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
       </div>
     </div>
@@ -359,6 +406,13 @@ export function CubeList({
 
 // A searchable field the backend serves by exact equality. A text field gets a
 // text input; the value travels as the field's filter value.
+//
+// The keystrokes stay local and only the pause reaches qwbe: the filter is an
+// exact-equality match, so every prefix of a word ("A", "Ac", "Acm") is a
+// request that cannot match anything. Typing "Acme" used to cost four requests
+// and three guaranteed misses.
+const FILTER_PAUSE_MS = 300
+
 function TextSearch({
   field,
   value,
@@ -368,14 +422,25 @@ function TextSearch({
   value: string
   onChange: (value: string) => void
 }) {
+  const [draft, setDraft] = useState(value)
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // A pause that never ends (the page is left mid-typing) must not fire.
+  useEffect(() => () => {
+    if (timer.current) clearTimeout(timer.current)
+  }, [])
   return (
     <div className="flex items-center gap-2">
       <span className="text-sm text-muted-foreground">{field.label}</span>
       <Input
         className="w-64"
         aria-label={`Filter by ${field.label}`}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
+        value={draft}
+        onChange={(e) => {
+          const next = e.target.value
+          setDraft(next)
+          if (timer.current) clearTimeout(timer.current)
+          timer.current = setTimeout(() => onChange(next), FILTER_PAUSE_MS)
+        }}
       />
     </div>
   )

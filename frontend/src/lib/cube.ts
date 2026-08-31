@@ -185,6 +185,23 @@ export function canEdit(field: FieldMetadata): boolean {
 
 // The sort a column click produces: undefined for a column the metadata does
 // not mark sortable, so a non-sortable header can never trigger a request.
+/**
+ * Where the reader is in the result set, for a paginator that can jump.
+ *
+ * `lastPage` is undefined when qwbe reports no total: nothing can then say how
+ * many pages exist, and only a short page proves the end was reached.
+ */
+export function pageWindow(
+  offset: number,
+  pageSize: number,
+  total: number | undefined,
+): { currentPage: number; lastPage: number | undefined } {
+  return {
+    currentPage: Math.floor(offset / pageSize) + 1,
+    lastPage: total === undefined ? undefined : Math.max(1, Math.ceil(total / pageSize)),
+  }
+}
+
 export function sortRequestFor(
   column: ColumnSpec,
   currentSortBy: string | undefined,
