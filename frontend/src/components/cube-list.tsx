@@ -11,7 +11,7 @@
 // parameters travel to qwbe; nothing here slices a full result set.
 
 import Link from "next/link"
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import {
   type ColumnSpec,
@@ -21,17 +21,22 @@ import {
   type Row,
   canEdit,
   columnsFromFields,
+  customValueOf,
+  renderKindOf,
   cubeApiPath,
   hrefForRelation,
   rowHref,
   listApiPath,
   metadataApiPath,
+  clearRelationMetaCache,
   resolveRelationTitle,
   saveCell,
   sortRequestFor,
   titleOf,
 } from "@/lib/cube"
 import { Button } from "@/components/ui/button"
+import { CustomFieldsPanel } from "@/components/custom-fields-panel"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -57,11 +62,17 @@ type EditState = { id: string; field: string; value: string }
 export function CubeList({
   cube,
   fixedFilters,
+  // Only the top-level list owns the definitions panel: an embedded child list
+  // (for example the contacts of one organization on the detail page) renders
+  // none, so a detail page does not show a second panel and does not fire a
+  // second permission check per list.
+  topLevel = true,
 }: {
   cube: string
   // Server-side equality filters pinned by the caller (for example the derived
   // contact list of one organization). Values are opaque ids.
   fixedFilters?: Record<string, string>
+  topLevel?: boolean
 }) {
   const [meta, setMeta] = useState<CubeMetadata | null>(null)
   const [metaError, setMetaError] = useState<string | null>(null)
@@ -74,8 +85,30 @@ export function CubeList({
   // string means "all".
   const [search, setSearch] = useState<Record<string, string>>({})
   const [edit, setEdit] = useState<EditState | null>(null)
+  // Bumped when a custom-field definition is added or deleted, so the metadata
+  // (and with it the columns) is re-read without a page reload.
+  const [metaVersion, setMetaVersion] = useState(0)
+  const reloadMeta = () => {
+    // A definition change invalidates the resolved-relation cache: the old
+    // metadata stays stale for the session otherwise.
+    clearRelationMetaCache()
+    setMetaVersion((v) => v + 1)
+  }
   // Per-cell error messages from a failed PATCH, keyed "id:field".
   const [cellErrors, setCellErrors] = useState<Record<string, string>>({})
+  // False until the client has hydrated: before that, a click on a rendered
+  // button reaches DOM the handler is not attached to yet (the observed race:
+  // a trusted click, handler prop attached, React still does not run it -- the
+  // node hydration replaces is not the node the event fired on). Until the
+  // mount effect below has run, an editable cell renders as plain text, so
+  // there is no affordance to click into a dead window.
+  const [hydrated, setHydrated] = useState(false)
+  // After paint: hydration has committed, so event handlers are attached and
+  // a click can no longer land on DOM that is about to be replaced.
+  useEffect(() => {
+    const t = setTimeout(() => setHydrated(true), 0)
+    return () => clearTimeout(t)
+  }, [])
 
   useEffect(() => {
     let alive = true
@@ -93,7 +126,7 @@ export function CubeList({
     return () => {
       alive = false
     }
-  }, [cube])
+  }, [cube, metaVersion])
 
   const filters = useMemo<Record<string, string>>(() => {
     const chosen: Record<string, string> = {}
@@ -159,27 +192,38 @@ export function CubeList({
   }
 
   const saveEdit = async (row: Row, fieldMeta: FieldMetadata, next: string) => {
-    const current = row[fieldMeta.name]
     setEdit(null)
-    if (next === String(current ?? "")) return
     const key = `${String(row.id)}:${fieldMeta.name}`
+    // saveCell derives the pre-edit value itself (customValueOf on the row),
+    // so a custom field emptied to "" is a real change and reaches qwbe.
     const result = await saveCell({
       rowPath: cubeApiPath(cube, `/${String(row.id)}`),
+      row,
       field: fieldMeta,
-      current,
       next,
       doFetch: fetch,
     })
     if (result.status === "saved") {
       // Only the patched key is merged: a concurrent, out-of-order response
-      // body must not overwrite the other columns of the row.
+      // body must not overwrite the other columns of the row. A custom
+      // field's value lives in the row's `custom` sub-object, where the cell
+      // reads it back -- merging it flat would leave the cell showing "--"
+      // or the stale value until a full reload.
+      const merge = (r: Row): Row =>
+        fieldMeta.custom
+          ? {
+              ...r,
+              custom: {
+                ...((r.custom as Row | undefined) ?? {}),
+                [result.field]: result.value,
+              },
+            }
+          : { ...r, [result.field]: result.value }
       setPage((p) =>
         p
           ? {
               ...p,
-              rows: p.rows.map((r) =>
-                String(r.id) === String(row.id) ? { ...r, [result.field]: result.value } : r,
-              ),
+              rows: p.rows.map((r) => (String(r.id) === String(row.id) ? merge(r) : r)),
             }
           : p,
       )
@@ -197,6 +241,7 @@ export function CubeList({
 
   return (
     <div className="flex flex-col gap-4">
+      <CustomFieldsPanel cube={cube} onChanged={reloadMeta} rendered={topLevel} />
       {searchableFields
         .filter((f) => !fixedFilters?.[f.name])
         .map((f) =>
@@ -269,6 +314,7 @@ export function CubeList({
                     edit={edit}
                     setEdit={setEdit}
                     error={cellErrors[`${String(row.id)}:${column.field.name}`]}
+                    interactive={hydrated}
                     onSave={(value) => saveEdit(row, column.field, value)}
                   />
                 </TableCell>
@@ -402,6 +448,7 @@ function Cell({
   edit,
   setEdit,
   error,
+  interactive,
   onSave,
 }: {
   row: Row
@@ -411,12 +458,45 @@ function Cell({
   edit: EditState | null
   setEdit: (edit: EditState | null) => void
   error?: string
+  interactive: boolean
   onSave: (value: string) => void
 }) {
   const field = column.field
-  const value = row[field.name]
+  // The value wherever the backend keeps it: a custom field's value rides in
+  // the row's `custom` sub-object, a static field's at the top level.
+  const value = customValueOf(row, field)
   const key = `${String(row.id)}:${field.name}`
   const editing = edit?.id === String(row.id) && edit.field === field.name
+
+  // Commit (or dismiss) when the pointer goes down OUTSIDE the editor, as a
+  // capture listener on the document. NOT on blur: a trusted click on the
+  // edit button queues a browser-side focus change that lands seconds later
+  // (observed 2026-09-01: the freshly mounted editor input was blurred with
+  // no related target, 4-9 s after the click, by no JavaScript call at all),
+  // and a commit-on-blur then closes the editor before anyone can type. A
+  // capture pointerdown runs before the focus machinery and is driven by the
+  // real pointer, so it fires exactly when a user clicks somewhere else.
+  // Radix portals (the open select dropdown) are excluded: choosing an
+  // option there IS the edit, not a dismissal.
+  const editorRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (!editing) return undefined
+    const onDocPointerDown = (e: PointerEvent) => {
+      const root = editorRef.current
+      const target = e.target
+      if (!root || !(target instanceof Node)) return
+      if (root.contains(target)) return
+      if (target.parentElement?.closest("[data-radix-popper-content-wrapper], [role='listbox']")) return
+      if (renderKindOf(field) === "text") {
+        const input = root.querySelector("input")
+        if (input) onSave(input.value)
+      } else {
+        setEdit(null)
+      }
+    }
+    document.addEventListener("pointerdown", onDocPointerDown, true)
+    return () => document.removeEventListener("pointerdown", onDocPointerDown, true)
+  }, [editing, field, onSave, setEdit])
 
   const startEdit = () =>
     setEdit({
@@ -428,52 +508,85 @@ function Cell({
   // The edit affordance follows the metadata alone: editable is enough. A
   // relation field edits as its opaque id for now; a picker is future work,
   // and shrinking the editable surface silently is not an option.
-  const editable = canEdit(field)
+  // The affordance only exists once the client has hydrated: before that the
+  // cell renders as plain text (see the hydrated gate in CubeList).
+  const editable = interactive && canEdit(field)
+
+  // A never-set boolean is absent, not "no": the same cell must not render a
+  // checkbox that starts unchecked and can only ever produce "true" as if the
+  // value were an explicit false.
+  const boolAbsent =
+    field.type === "boolean" && (value === null || value === undefined)
 
   let content: React.ReactNode
   if (field.relation && value !== null && value !== undefined) {
     content = <RelationValue target={field.relation.target} id={String(value)} />
-  } else if (field.type === "boolean") {
+  } else if (field.type === "boolean" && !boolAbsent) {
     content = value ? "yes" : "no"
   } else {
     content = value === null || value === undefined ? "—" : String(value)
   }
+  // One long custom text value must not destroy the table layout: clamp the
+  // cell, keep the full value in the title tooltip.
+  const textValue = value === null || value === undefined ? null : String(value)
+  const cellText = (node: React.ReactNode) => (
+    <span className="block max-w-48 truncate" title={textValue ?? undefined}>
+      {node}
+    </span>
+  )
 
   return (
     <div className="flex flex-col gap-1">
       {editing ? (
-        field.enum && field.enum.length > 0 ? (
+        <div ref={editorRef} className="flex flex-col gap-1">
+        {renderKindOf(field) === "select" ? (
           <Select
-            value={edit.value}
+            // Radix forbids an empty-string SelectItem value; the empty item
+            // rides on a sentinel and is translated back to "" on save.
+            value={edit.value === "" ? "__clear__" : edit.value}
             onValueChange={(v) => {
               setEdit(null)
-              onSave(v)
+              onSave(v === "__clear__" ? "" : v)
             }}
           >
             <SelectTrigger className="w-40" aria-label={field.label}>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {field.nullable && <SelectItem value="">—</SelectItem>}
-              {field.enum.map((v) => (
+              {/* An OPTIONAL field can be cleared: the catalogue hard-codes
+                  nullable: false on custom fields, so "not required" is the
+                  only signal the UI has. */}
+              {!field.required && <SelectItem value="__clear__">—</SelectItem>}
+              {field.enum!.map((v) => (
                 <SelectItem key={v} value={v}>
                   {v}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
+        ) : renderKindOf(field) === "checkbox" ? (
+          <Checkbox
+            autoFocus
+            aria-label={field.label}
+            checked={edit.value === "true"}
+            // Clicking elsewhere must not leave the cell stuck in edit mode.
+            onCheckedChange={(checked) => {
+              setEdit(null)
+              onSave(checked ? "true" : "false")
+            }}
+          />
         ) : (
           <Input
             autoFocus
             defaultValue={edit.value}
             aria-label={field.label}
-            onBlur={(e) => onSave(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") onSave(e.currentTarget.value)
               if (e.key === "Escape") setEdit(null)
             }}
           />
-        )
+        )}
+        </div>
       ) : field.relation && hrefForRelation(field.relation.target, String(value ?? "")) ? (
         <Link
           className="underline"
@@ -493,12 +606,23 @@ function Cell({
           // The accessible name must say what the button does; the cell value
           // alone left a screen reader no way to find the edit affordance.
           aria-label={`Edit ${field.label}`}
+          // A REAL (trusted) click moves focus to this button; when the
+          // editor replaces it, the browser's delayed focus lands on the
+          // node that no longer exists, blurs the freshly mounted editor
+          // input, and the input's commit-on-blur closes the editor before
+          // anyone could type (observed 2026-09-01: trusted click, handler
+          // ran, editor mounted and focused, then a blurred input closed it).
+          // Suppressing the mousedown focus transfer removes the window;
+          // the editor's own autoFocus then holds the focus.
+          onMouseDown={(e) => e.preventDefault()}
           onClick={startEdit}
         >
-          {content}
+          {cellText(content)}
         </button>
-      ) : (
+      ) : field.relation || (isTitle && rowLink) ? (
         content
+      ) : (
+        cellText(content)
       )}
       {error && (
         <span className="text-xs text-destructive" role="alert" data-cell-error={key}>
