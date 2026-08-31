@@ -1,0 +1,19 @@
+{
+  // The e2e suite is plain .mjs with no JSDoc types, so it needs looser rules
+  // than the app: strict implicit-any would flood it, and its catch blocks only
+  // ever feed String(...). Those relaxations live HERE, not in the root config,
+  // where they would also let a new unannotated parameter through in the app's
+  // own .tsx (QWB-54, review of ticket 01).
+  //
+  // eslint's projectService picks the nearest tsconfig, so the lint setup needs
+  // no change. `npm run typecheck` runs this project too -- otherwise the
+  // Promise-as-boolean net would exist only in lint.
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "checkJs": true,
+    "noImplicitAny": false,
+    "useUnknownInCatchVariables": false,
+    "noEmit": true
+  },
+  "include": ["**/*.mjs"]
+}
