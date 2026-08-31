@@ -481,7 +481,11 @@ export async function scenarioLogout() {
   snap = snapshot()
   shot("06-me-after-logout")
   shot("06-final", { full: true })
-  const pass = bounced && snapshot().origin.endsWith("/login") && !snap.text.includes("Signed in as")
+  // The bounce now carries the destination (/login?next=%2Fme), so compare the
+  // PATH, not the whole URL: endsWith("/login") would call a correct redirect
+  // a failure (QWB-54).
+  const onLogin = new URL(snapshot().origin).pathname === "/login"
+  const pass = bounced && onLogin && !snap.text.includes("Signed in as")
   return record(name, pass ? "PASS" : "RED", pass ? "/me redirects to /login after logout" : "/me still reachable", "06-final.png")
 }
 
