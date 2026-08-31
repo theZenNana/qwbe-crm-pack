@@ -87,6 +87,9 @@ const summary = (c: ContractRow): SummaryRow => ({
 export const cube = defineCube(group, {
   manifest: {
     name: "contracts",
+    // Opts the cube into the metadata drift gate (qwbe src/metadata/schema-drift.ts):
+    // an undeclared version means a schema change cannot be caught (QWB-54).
+    version: "1.0.0",
     parent: "crm",
     tables: [TABLE],
     entity: ENTITY,
