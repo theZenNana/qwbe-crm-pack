@@ -24,7 +24,7 @@ import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from "@effect/platform"
 import { Effect, Schema } from "effect"
 import { Authorization, requirePermission } from "qwbe-core/auth"
 import { defineCube } from "qwbe-core/cube"
-import { EntityMeta, type SummaryRow } from "qwbe-core/entity"
+import { type SummaryRow } from "qwbe-core/entity"
 import { Forbidden, NotFound } from "qwbe-core/errors"
 import { PageOf } from "qwbe-core/http"
 import { pageRequest } from "qwbe-core/pagination"
@@ -143,7 +143,7 @@ export const cube = defineCube(group, {
           if (!current) return yield* Effect.fail(new NotFound({ message: `contact ${path.id} does not exist` }))
           // An empty PATCH changes nothing: no version bump, no outbox row.
           if (Object.keys(payload).length === 0) return { ...current, accountId: current.accountId ?? null }
-          const c = (yield* store.update(TABLE, path.id, payload as Partial<ContactRow>)) as ContactRow
+          const c = (yield* store.update(TABLE, path.id, payload)) as ContactRow
           return { ...c, accountId: c.accountId ?? null }
         }),
     },

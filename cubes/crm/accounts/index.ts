@@ -130,7 +130,7 @@ export const cube = defineCube(group, {
           // An empty PATCH changes nothing: the row is returned as is, with no version bump
           // and no outbox row — store.update with an empty patch would write anyway.
           if (Object.keys(payload).length === 0) return current
-          const a = yield* store.update(TABLE, path.id, payload as unknown as Partial<AccountRow>)
+          const a = yield* store.update(TABLE, path.id, payload)
           return a as AccountRow
         }),
     },
