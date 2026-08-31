@@ -171,28 +171,52 @@ const pause = async (ms = 800) => {
 }
 
 /**
- * Open a Radix Select through the browser only, retrying until an option shows.
+ * Leave a Radix Select open with its options readable in the snapshot.
  *
- * A CDP click on the radix Select trigger does not open it (the trigger wants
- * a keydown, and the OS-level path is dead on a locked desktop), so: focus the
- * trigger and dispatch a synthetic Enter keydown -- the same event radix
- * handles -- then re-snapshot. Refs go stale across re-renders, so the caller
- * must take a FRESH snapshot and click the option ref from it.
+ * Two ways in, and they fight each other -- which is what made the caller's
+ * assertion land about one run in two (measured 2026-08-31 on the live stack,
+ * replaying only this sequence):
+ *
+ * - the CDP click the caller already made DOES open the select: right after
+ *   it, `aria-expanded` is "true", the five options are in the DOM and focus
+ *   sits inside the listbox;
+ * - `orca focus` on the trigger then pulls focus back OUT of that listbox,
+ *   and radix closes on it. The close is asynchronous: the check that follows
+ *   can still read an open list while the close is already on its way, so the
+ *   caller's next snapshot finds no options at all. Measured, one attempt:
+ *     before: expanded=true,  domOptions=[text,number,date,bool,select]
+ *     after:  expanded=false, domOptions=[], active=cf-type/combobox
+ *
+ * So the keyboard open is only for a select that is really CLOSED, and
+ * "really" is read from the DOM: the accessibility snapshot lags a render
+ * behind and deciding on it is how the toggle got started. When the list is
+ * open, wait for the options to reach the snapshot -- that is what the caller
+ * reads -- and touch nothing.
  */
 async function openSelect(ref) {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    orca("focus", "--element", ref, ...pageArgs())
+  const listOpen = () =>
     orca(
       "eval",
       "--expression",
-      "(() => { const el = document.activeElement; if (!el || el.getAttribute('role') !== 'combobox') return 'no-combobox'; el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); return 'opened' })()",
+      "(() => String(document.querySelector('[role=option]') !== null))()",
       ...pageArgs(),
-    )
-    await pause(800)
-    const snap = snapshot()
-    if (Object.values(snap.refs).some((v) => v.role === "option")) return true
+    )?.result === "true"
+  const deadline = Date.now() + 15_000
+  for (;;) {
+    if (listOpen()) {
+      if (Object.values(snapshot().refs).some((v) => v.role === "option")) return true
+    } else {
+      orca("focus", "--element", ref, ...pageArgs())
+      orca(
+        "eval",
+        "--expression",
+        "(() => { const el = document.activeElement; if (!el || el.getAttribute('role') !== 'combobox') return 'no-combobox'; el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); return 'opened' })()",
+        ...pageArgs(),
+      )
+    }
+    if (Date.now() >= deadline) return false
+    await new Promise((r) => setTimeout(r, 250))
   }
-  return false
 }
 
 // --- 1. login with the correct credentials lands on the identity page -----------
