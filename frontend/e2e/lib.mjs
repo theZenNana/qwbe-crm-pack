@@ -196,7 +196,12 @@ export function type(text) {
   if (lastClicked) {
     const focus = orca("eval", "--expression", activeElementName, ...pageArgs())
     const focusedName = typeof focus?.result === "string" ? focus.result : ""
-    if (focusedName !== lastClicked) {
+    // The editor focus carries the FIELD's label ("Billing City") while the
+    // clicked affordance is named "Edit <label>"; both must be accepted.
+    const related =
+      focusedName === lastClicked ||
+      (lastClicked.startsWith("Edit ") && focusedName === lastClicked.slice(5).trim())
+    if (!related) {
       throw new Error(
         `type("${text}") would land on "${focusedName || "(no focus)"}, not the clicked "${lastClicked}"`,
       )

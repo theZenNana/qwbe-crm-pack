@@ -516,9 +516,21 @@ export async function scenarioCustomField() {
   }
 
   // 5. delete the definition; the column disappears on the next metadata
-  // read. The delete is a two-step confirm in the UI (QWB-52 review 17):
+  // read. The panel was closed for the value assertion above, so reopen it
+  // first. The delete is a two-step confirm in the UI (QWB-52 review 17):
   // the first click scans how many rows carry a value.
-  await pause()
+  const reopenBtn = Object.entries(snap.refs).find(
+    ([, v]) => v.role === "button" && v.name === "Custom fields",
+  )?.[0]
+  if (!reopenBtn) {
+    shot("07-delete-RED", { full: true })
+    return record(name, "RED", "the Custom fields button is gone after closing the panel", "07-delete-RED.png")
+  }
+  click(reopenBtn, "Custom fields")
+  if (!(await waitForText("Fields defined at runtime", 15_000))) {
+    shot("07-delete-RED", { full: true })
+    return record(name, "RED", "definitions panel did not reopen", "07-delete-RED.png")
+  }
   snap = snapshot()
   const deleteBtn = Object.entries(snap.refs).find(
     ([, v]) => v.role === "button" && v.name === `Delete ${CF_LABEL}`,
@@ -584,7 +596,8 @@ export async function scenarioReader(qwbePort) {
   const landed = (await waitForUrl(".*/me.*")) && (await waitForText("Signed in as", 15_000))
   if (!landed) {
     shot("08-reader-RED", { full: true })
-    return record(name, "RED", "reader login did not land on the identity page", "08-reader-RED.png")
+    snap = snapshot()
+    return record(name, "RED", `reader login did not land on the identity page (origin ${snap.origin}; text: ${snap.text.replace(/\s+/g, " ").slice(0, 200)})`, "08-reader-RED.png")
   }
   await open("/contacts")
   await settle(CONTACT_LINKED)
