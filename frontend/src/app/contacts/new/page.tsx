@@ -7,9 +7,12 @@ export default function NewContactPage() {
   return (
     <main className="mx-auto flex w-full max-w-7xl flex-col gap-4 p-4">
       <h1 className="text-xl font-semibold">New contact</h1>
+      {/* externalId stays off the form (QWB-54 review 2, finding 7): it is
+          the import tool's identity, and its unique index turns a hand-typed
+          duplicate into a 500, not a form refusal. */}
       <CubeCreateForm
         cube="crm/contacts"
-        fields={["name", "email", "phone", "company", "organizationId", "externalId"]}
+        fields={["name", "email", "phone", "company", "organizationId"]}
       />
     </main>
   )
