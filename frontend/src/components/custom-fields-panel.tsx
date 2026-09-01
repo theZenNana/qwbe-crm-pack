@@ -22,6 +22,13 @@ import {
   httpPrefixOf,
   type Row,
 } from "@/lib/cube"
+import {
+  readPrefs,
+  writePrefs,
+  withDefault,
+  withHidden,
+  type CustomFieldPrefs,
+} from "@/lib/field-prefs"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -111,6 +118,23 @@ export function CustomFieldsPanel({
   const [fieldTypes, setFieldTypes] = useState<string[] | null>(null)
   const [defs, setDefs] = useState<CustomFieldDef[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // The per-browser UI layer (lib/field-prefs): which fields this browser
+  // hides from the lists and what a create form prefills. NOT server state --
+  // the definition itself is what the API owns; see field-prefs.ts for why.
+  // Read in an effect, so the server render and the first client render agree
+  // (no hydration mismatch) and a cube switch re-reads its own document.
+  const [prefs, setPrefs] = useState<CustomFieldPrefs>({ hidden: [], defaults: {} })
+  useEffect(() => {
+    // The deferred read is the codebase's hydration pattern (the hydrated
+    // gate below uses the same timer): localStorage exists only on the
+    // client, and the first render must agree with the server's.
+    const t = setTimeout(() => setPrefs(readPrefs(cube)), 0)
+    return () => clearTimeout(t)
+  }, [cube])
+  const changePrefs = (next: CustomFieldPrefs) => {
+    writePrefs(cube, next)
+    setPrefs(next)
+  }
 
   // Permission check first: without customfields:write this component renders
   // the message instead of management UI.
@@ -193,6 +217,8 @@ export function CustomFieldsPanel({
                   <TableHead>Name</TableHead>
                   <TableHead>Type</TableHead>
                   <TableHead>Required</TableHead>
+                  <TableHead>Hidden on lists</TableHead>
+                  <TableHead>Default value</TableHead>
                   <TableHead>Options</TableHead>
                   <TableHead>
                     <span className="sr-only">Actions</span>
@@ -205,6 +231,25 @@ export function CustomFieldsPanel({
                     <TableCell>{d.label || d.name}</TableCell>
                     <TableCell>{d.fieldType}</TableCell>
                     <TableCell>{d.required ? "yes" : "no"}</TableCell>
+                    <TableCell>
+                      {/* hide != delete (F2): the definition and every stored
+                          value stay; this browser just drops the field from
+                          the list columns. */}
+                      <Checkbox
+                        aria-label={`Hide ${d.label || d.name} on lists`}
+                        checked={prefs.hidden.includes(d.name)}
+                        onCheckedChange={(checked) =>
+                          changePrefs(withHidden(prefs, d.name, checked === true))
+                        }
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <DefaultValueEditor
+                        def={d}
+                        value={prefs.defaults[d.name] ?? ""}
+                        onChange={(v) => changePrefs(withDefault(prefs, d.name, v))}
+                      />
+                    </TableCell>
                     <TableCell>{d.options.length > 0 ? d.options.join(", ") : "—"}</TableCell>
                     <TableCell>
                       <DeleteButton
@@ -223,7 +268,7 @@ export function CustomFieldsPanel({
                 ))}
                 {defs !== null && defs.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={5} className="text-muted-foreground">
+                    <TableCell colSpan={7} className="text-muted-foreground">
                       No custom fields defined.
                     </TableCell>
                   </TableRow>
@@ -336,6 +381,58 @@ function DeleteButton({
     >
       Delete
     </Button>
+  )
+}
+
+// The default-value editor for one definition, shaped by the field's own type:
+// a choice for `select` (its options) and `bool` (true/false), a text input for
+// everything else. "No default" is the empty value, which removes the
+// preference entirely. The stored string is exactly what a form field holds;
+// the create form applies it through the same coerce() a typed value goes
+// through, so the kernel's own validation stays the only validator.
+function DefaultValueEditor({
+  def,
+  value,
+  onChange,
+}: {
+  def: CustomFieldDef
+  value: string
+  onChange: (value: string) => void
+}) {
+  // Radix forbids an empty-string SelectItem value; the empty choice rides on
+  // a sentinel and is translated back to "" (no default) on change.
+  const NONE = "__none__"
+  const choices =
+    def.fieldType === "select"
+      ? def.options
+      : def.fieldType === "bool"
+        ? ["true", "false"]
+        : null
+  if (!choices) {
+    return (
+      <Input
+        className="w-40"
+        aria-label={`Default for ${def.label || def.name}`}
+        value={value}
+        placeholder="no default"
+        onChange={(e) => onChange(e.target.value)}
+      />
+    )
+  }
+  return (
+    <Select value={value === "" ? NONE : value} onValueChange={(v) => onChange(v === NONE ? "" : v)}>
+      <SelectTrigger className="w-40" aria-label={`Default for ${def.label || def.name}`}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value={NONE}>No default</SelectItem>
+        {choices.map((c) => (
+          <SelectItem key={c} value={c}>
+            {c}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   )
 }
 

@@ -36,6 +36,7 @@ import {
   sortRequestFor,
 } from "@/lib/cube"
 import { relationRefsOf } from "@/lib/relation-batch"
+import { readPrefs } from "@/lib/field-prefs"
 import { useRelationTitles } from "@/hooks/use-relation-titles"
 import { RelationCell, RelationLink } from "@/components/relation-cell"
 import { RelationTypeahead } from "@/components/relation-typeahead"
@@ -165,11 +166,27 @@ export function CubeList({
 
   useEffect(() => load(), [load])
 
+  // Fields this browser hides (the Settings UI preference, lib/field-prefs)
+  // drop out of the columns. The definition and the values stay on the server:
+  // hide != delete, and the detail page and create form are untouched.
+  const [hiddenNames, setHiddenNames] = useState<string[]>([])
+  useEffect(() => {
+    // Deferred like the hydration gate above: localStorage exists only on
+    // the client, and the first render must agree with the server's.
+    const t = setTimeout(() => setHiddenNames(readPrefs(cube).hidden), 0)
+    return () => clearTimeout(t)
+  }, [cube])
+
   // Columns are pure derivation from the metadata; they live above the early
   // returns because the relation batch below needs them.
   const columns = useMemo(
-    () => (meta ? columnsFromFields(meta.fields).filter((c) => c.visible) : []),
-    [meta],
+    () =>
+      meta
+        ? columnsFromFields(meta.fields).filter(
+            (c) => c.visible && !hiddenNames.includes(c.field.name),
+          )
+        : [],
+    [meta, hiddenNames],
   )
   // Every relation value on the current page, deduplicated. One ids batch per
   // distinct target cube resolves them all (useRelationTitles); the old list
