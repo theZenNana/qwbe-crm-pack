@@ -18,6 +18,7 @@ import { Separator } from "@/components/ui/separator"
 const ENTRIES = [
   { href: "/organizations", label: "Organizations" },
   { href: "/contacts", label: "Contacts" },
+  { href: "/settings", label: "Settings" },
 ] as const
 
 // Routes reachable without a session: a bar offering Organizations and "Log out" to someone who

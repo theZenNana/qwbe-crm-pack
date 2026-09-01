@@ -32,7 +32,6 @@ import {
   listApiPath,
   metadataApiPath,
   pageWindow,
-  clearRelationMetaCache,
   saveCell,
   sortRequestFor,
 } from "@/lib/cube"
@@ -41,7 +40,6 @@ import { useRelationTitles } from "@/hooks/use-relation-titles"
 import { RelationCell, RelationLink } from "@/components/relation-cell"
 import { RelationTypeahead } from "@/components/relation-typeahead"
 import { Button } from "@/components/ui/button"
-import { CustomFieldsPanel } from "@/components/custom-fields-panel"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import {
@@ -80,11 +78,6 @@ export function CubeList({
   // empty table. The caller names the entity; the default keeps a generic list
   // honest without pretending to know what the rows are.
   emptyMessage = "No rows yet.",
-  // Only the top-level list owns the definitions panel: an embedded child list
-  // (for example the contacts of one organization on the detail page) renders
-  // none, so a detail page does not show a second panel and does not fire a
-  // second permission check per list.
-  topLevel = true,
 }: {
   cube: string
   // Server-side equality filters pinned by the caller (for example the derived
@@ -93,7 +86,6 @@ export function CubeList({
   createHref?: string
   addLabel?: string
   emptyMessage?: string
-  topLevel?: boolean
 }) {
   const [meta, setMeta] = useState<CubeMetadata | null>(null)
   const [metaError, setMetaError] = useState<string | null>(null)
@@ -107,15 +99,6 @@ export function CubeList({
   // string means "all".
   const [search, setSearch] = useState<Record<string, string>>({})
   const [edit, setEdit] = useState<EditState | null>(null)
-  // Bumped when a custom-field definition is added or deleted, so the metadata
-  // (and with it the columns) is re-read without a page reload.
-  const [metaVersion, setMetaVersion] = useState(0)
-  const reloadMeta = () => {
-    // A definition change invalidates the resolved-relation cache: the old
-    // metadata stays stale for the session otherwise.
-    clearRelationMetaCache()
-    setMetaVersion((v) => v + 1)
-  }
   // Per-cell error messages from a failed PATCH, keyed "id:field".
   const [cellErrors, setCellErrors] = useState<Record<string, string>>({})
   // False until the client has hydrated: before that, a click on a rendered
@@ -148,7 +131,7 @@ export function CubeList({
     return () => {
       alive = false
     }
-  }, [cube, metaVersion])
+  }, [cube])
 
   const filters = useMemo<Record<string, string>>(() => {
     const chosen: Record<string, string> = {}
@@ -197,7 +180,10 @@ export function CubeList({
     () => (page ? relationRefsOf(page.rows, columns.map((c) => c.field)) : []),
     [page, columns],
   )
-  const resolveTitle = useRelationTitles(relationRefs, metaVersion)
+  // Definitions are managed in Settings (QWB-54, F2), never on a list, so a
+  // list observes no definition change during its life: the bust stays 0 and
+  // navigating here re-mounts the list, which re-reads the metadata anyway.
+  const resolveTitle = useRelationTitles(relationRefs, 0)
 
   if (metaError) return <p role="alert">metadata unavailable: {metaError}</p>
   if (!meta) return <Skeleton className="h-64 w-full" />
@@ -287,7 +273,6 @@ export function CubeList({
           </Button>
         </div>
       )}
-      <CustomFieldsPanel cube={cube} onChanged={reloadMeta} rendered={topLevel} />
       {searchableFields
         .filter((f) => !fixedFilters?.[f.name])
         .map((f) =>
