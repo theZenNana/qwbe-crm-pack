@@ -6,7 +6,12 @@ export default function ContactsPage() {
   return (
     <main className="mx-auto flex w-full max-w-7xl flex-col gap-4 p-4">
       <h1 className="text-xl font-semibold">Contacts</h1>
-      <CubeList cube="crm/contacts" createHref="/contacts/new" addLabel="Add contact" />
+      <CubeList
+        cube="crm/contacts"
+        createHref="/contacts/new"
+        addLabel="Add contact"
+        emptyMessage="No contacts yet."
+      />
     </main>
   )
 }

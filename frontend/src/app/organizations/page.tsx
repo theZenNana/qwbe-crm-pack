@@ -10,6 +10,7 @@ export default function OrganizationsPage() {
         cube="crm/organizations"
         createHref="/organizations/new"
         addLabel="Add organization"
+        emptyMessage="No organizations yet."
       />
     </main>
   )

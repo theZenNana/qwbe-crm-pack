@@ -76,6 +76,10 @@ export function CubeList({
   // of one organization on the detail page -- renders no button.
   createHref,
   addLabel = "Add",
+  // The empty state's message (QWB-54, F1): the wipe case must not be a silent
+  // empty table. The caller names the entity; the default keeps a generic list
+  // honest without pretending to know what the rows are.
+  emptyMessage = "No rows yet.",
   // Only the top-level list owns the definitions panel: an embedded child list
   // (for example the contacts of one organization on the detail page) renders
   // none, so a detail page does not show a second panel and does not fire a
@@ -88,6 +92,7 @@ export function CubeList({
   fixedFilters?: Record<string, string>
   createHref?: string
   addLabel?: string
+  emptyMessage?: string
   topLevel?: boolean
 }) {
   const [meta, setMeta] = useState<CubeMetadata | null>(null)
@@ -309,6 +314,25 @@ export function CubeList({
           ),
         )}
       {listError && <p role="alert">{listError}</p>}
+      {page && page.rows.length === 0 ? (
+        // The empty state replaces the silent empty table (QWB-54, F1). A
+        // wiped or never-populated cube gets the message and the create
+        // action; a filtered search that finds nothing is a different
+        // message, with the filters -- not the create button -- as the way
+        // out.
+        Object.keys(effectiveFilters).length > 0 ? (
+          <p className="text-sm text-muted-foreground">No rows match the current filters.</p>
+        ) : (
+          <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed p-8 text-center">
+            <p className="text-sm text-muted-foreground">{emptyMessage}</p>
+            {createHref && (
+              <Button asChild>
+                <Link href={createHref}>{addLabel}</Link>
+              </Button>
+            )}
+          </div>
+        )
+      ) : (
       <Table>
         <TableHeader>
           <TableRow>
@@ -364,6 +388,8 @@ export function CubeList({
           ))}
         </TableBody>
       </Table>
+      )}
+      {(!page || page.rows.length > 0) && (
       <div className="flex items-center justify-between">
         <span className="text-sm text-muted-foreground">
           {page
@@ -435,6 +461,7 @@ export function CubeList({
           </Select>
         </div>
       </div>
+      )}
     </div>
   )
 }
