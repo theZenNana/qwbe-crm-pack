@@ -11,10 +11,12 @@
 // metadata: on a stack whose custom-field definitions carry required flags
 // (the vtiger mirror: form/tva/cui on organizations) the kernel refuses every
 // create without them, so a basic form without them could not create a row at
-// all. No management surface here -- attaching, defaults and hiding are the
-// settings area's job (F2). The control per field follows the metadata alone
-// (renderKindOf, the same classifier the inline editor uses): an enum is a
-// select, a boolean a checkbox, everything else a text input.
+// all. No management surface here -- attaching and hiding are the settings
+// area's job (F2). Non-required customs WITH a default value (the settings
+// preference, lib/field-prefs) join the form too, prefilled: a default that
+// never reaches a row is dead UI. The control per field follows the metadata
+// alone (renderKindOf, the same classifier the inline editor uses): an enum
+// is a select, a boolean a checkbox, everything else a text input.
 //
 // Submit POSTs the filled fields through the server proxy (the token stays in
 // the cookie) and lands on the new row's detail page; qwbe's own refusal
@@ -36,8 +38,10 @@ import {
   rowHref,
   routeOf,
   type CubeMetadata,
+  type FieldMetadata,
   type Row,
 } from "@/lib/cube"
+import { readPrefs } from "@/lib/field-prefs"
 import { RelationTypeahead } from "@/components/relation-typeahead"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -98,6 +102,28 @@ export function CubeCreateForm({
   // fields the schema actually accepts on create are rendered. The required
   // custom fields follow (metadata order): the kernel refuses a create that
   // lacks them, so they are part of the create contract, not decoration.
+  // Non-required customs carrying a settings default come last, prefilled.
+  const [defaultedCustoms, setDefaultedCustoms] = useState<FieldMetadata[]>([])
+  useEffect(() => {
+    if (!meta) return
+    // The deferred client-only read is this app's hydration pattern (the
+    // hydrated gate below): localStorage exists only in the browser, and the
+    // first render must agree with the server's.
+    const t = setTimeout(() => {
+      const { defaults } = readPrefs(cube)
+      const carrying = meta.fields.filter((f) => f.custom && defaults[f.name])
+      setDefaultedCustoms(carrying.filter((f) => !f.required))
+      // A default prefills any custom field on the form -- required ones
+      // included; what was typed already wins over the default.
+      setValues((v) => {
+        const next = { ...v }
+        for (const f of carrying) if (!next[f.name]) next[f.name] = defaults[f.name]
+        return next
+      })
+    }, 0)
+    return () => clearTimeout(t)
+  }, [meta, cube])
+
   const formFields = useMemo(() => {
     if (!meta) return []
     const statics = fields.flatMap((name) => {
@@ -105,8 +131,8 @@ export function CubeCreateForm({
       return field ? [field] : []
     })
     const requiredCustoms = meta.fields.filter((f) => f.custom && f.required)
-    return [...statics, ...requiredCustoms]
-  }, [meta, fields])
+    return [...statics, ...requiredCustoms, ...defaultedCustoms]
+  }, [meta, fields, defaultedCustoms])
 
   const setValue = (name: string, value: string) =>
     setValues((v) => ({ ...v, [name]: value }))
