@@ -1,9 +1,10 @@
 // @ts-check
-// The six end-to-end scenarios (QWB-51), driven through the Orca browser.
+// The end-to-end scenarios (QWB-51), driven through the Orca browser.
 //
 // Every scenario records one PASS / RED / SKIP line and at least one screenshot into the
-// dated results directory. Nothing here talks to qwbe directly except the metadata lookup
-// for the non-editable-field scenario; everything else goes through the real UI.
+// dated results directory. Nothing here talks to qwbe directly except the metadata lookups
+// and the API read-backs; everything else goes through the real UI. The scenario numbers
+// are authoring order, not run order (10 runs between 06 and 08).
 
 import {
   setPage,
@@ -513,31 +514,97 @@ export async function scenarioLogout() {
   return record(name, pass ? "PASS" : "RED", pass ? "/me redirects to /login after logout" : "/me still reachable", "06-final.png")
 }
 
+// --- 10. create an organization through the F1 form ------------------------------
+// (Numbered 10 at authoring time; it runs between 05 and 07 in runAll.) The
+// create form is the F1 surface: the page names the basic field set, the
+// metadata supplies labels and required flags, the submit goes through the
+// server proxy and lands on the new row's detail page. externalId must NOT be
+// offered (review 14b round 2, finding 7): it carries the import identity, and
+// its unique partial index turns a hand-typed duplicate into a 500, not a
+// refusal.
+export async function scenarioCreateOrganization(api) {
+  const name = "create organization through the form lands on its detail page"
+  const orgName = `E2E Created Org ${Date.now()}`
+  await open("/organizations/new")
+  await settle("New organization")
+  let snap = snapshot()
+  shot("10-create-form")
+  const externalOffered = Object.values(snap.refs).some((v) => (v.name ?? "") === "External Id")
+  const nameBox = await clickStable((v) => v.role === "textbox" && v.name === "Name", "Name")
+  if (!nameBox || externalOffered) {
+    shot("10-create-RED", { full: true })
+    return record(
+      name,
+      "RED",
+      externalOffered ? "the form offers externalId (finding 7)" : "no Name input on the create form",
+      "10-create-RED.png",
+    )
+  }
+  type(orgName)
+  const industryBox = await clickStable((v) => v.role === "textbox" && v.name === "Industry", "Industry")
+  if (industryBox) type("e2e manufacturing")
+  const submit = await clickStable((v) => v.role === "button" && v.name === "Create", "Create")
+  if (!submit) {
+    shot("10-create-RED", { full: true })
+    return record(name, "RED", "no Create button on the form", "10-create-RED.png")
+  }
+  // The detail route is /organizations/<id>; /organizations/new must NOT match.
+  const landed = await waitForUrl("organizations/(?!new)", 20_000)
+  snap = snapshot()
+  shot("10-after-create")
+  // Page text is not proof the create reached qwbe: read the row back.
+  const row = (await api.call("/organizations?limit=50")).body?.rows?.find((r) => r.name === orgName)
+  const pass = landed && snap.text.includes(orgName) && Boolean(row)
+  return record(
+    name,
+    pass ? "PASS" : "RED",
+    pass
+      ? `form submitted, detail page shows the name, row read back through the API (${row?.id})`
+      : `landed=${landed}, name shown=${snap.text.includes(orgName)}, backend row=${Boolean(row)}`,
+    "10-after-create.png",
+  )
+}
 
-// --- 7. a custom field defined in the UI, used, and deleted (QWB-52) -------------
+// --- 7. a custom field defined in Settings, used on the list, deleted (QWB-52, F2) ---
+// F2 moved the definitions panel off the lists and onto /settings: the panel is
+// always rendered there (no button opens it) and the Entity selector picks the
+// cube its definitions target. Define and delete happen on /settings; the value
+// is set inline on the contacts list like any other cell.
 const CF_NAME = "e2eChannel"
 const CF_LABEL = "E2E Channel"
 const CF_OPTIONS = "email, phone, event"
 
-export async function scenarioCustomField(api) {
-  const name = "custom field defined in the UI appears, is set inline, and disappears on delete"
-  await dropDefinitions(api, "crm/contacts", [CF_NAME])
-  await open("/contacts")
-  await settle(CONTACT_LINKED)
-  let snap = snapshot()
+/**
+ * Point the Settings panel at one entity. The selector is component state, so
+ * EVERY return to /settings must choose again; without it the panel shows the
+ * previously selected cube's definitions.
+ */
+async function chooseEntity(label) {
+  const combo = await clickStable((v) => v.role === "combobox" && v.name === "Entity", "Entity")
+  if (!combo) return false
+  if (!(await openSelect(combo))) return false
+  const option = Object.entries(snapshot().refs).find(([, v]) => v.role === "option" && v.name === label)?.[0]
+  if (!option) return false
+  click(option, snapshot().refs[option]?.name)
+  await pause()
+  return true
+}
 
-  // 1. open the definitions panel
-  const panelBtn = await clickStable((v) => v.role === "button" && v.name === "Custom fields", "Custom fields")
-  if (!panelBtn) {
+export async function scenarioCustomField(api) {
+  const name = "custom field defined in Settings appears, is set inline, and disappears on delete"
+  await dropDefinitions(api, "crm/contacts", [CF_NAME])
+
+  // 1. open Settings; the panel is on the page, addressed at the contacts cube
+  await open("/settings")
+  if (!(await waitForText("Fields defined at runtime", 15_000))) {
     shot("07-panel-RED", { full: true })
-    return record(name, "RED", "no Custom fields button on the contacts list", "07-panel-RED.png")
+    return record(name, "RED", "the definitions panel is not on the settings page", "07-panel-RED.png")
   }
-  const panelOpen = await waitForText("Fields defined at runtime", 15_000)
-  snap = snapshot()
-  if (!panelOpen) {
-    shot("07-panel-RED", { full: true })
-    return record(name, "RED", "definitions panel did not open", "07-panel-RED.png")
+  if (!(await chooseEntity("Contacts"))) {
+    shot("07-entity-RED", { full: true })
+    return record(name, "RED", "the Entity selector did not switch to Contacts", "07-entity-RED.png")
   }
+  let snap = snapshot()
   shot("07-panel-open")
 
   // 2. define a select field
@@ -580,19 +647,26 @@ export async function scenarioCustomField(api) {
     shot("07-define-RED", { full: true })
     return record(name, "RED", "Add field button not found", "07-define-RED.png")
   }
-  // The definition appears in the panel list AND the column appears in the
-  // table (the metadata is re-read after the definition change).
-  const columnShown = await waitForText(CF_LABEL, 15_000)
+  // The definition appears in the panel's table (the panel re-reads after the
+  // change), and the column appears on the contacts list from the list's own
+  // metadata read.
+  const definedShown = await waitForText(CF_LABEL, 15_000)
   snap = snapshot()
-  shot("07-column-appears")
-  if (!columnShown) {
+  shot("07-definition-appears")
+  if (!definedShown) {
     shot("07-column-RED", { full: true })
-    return record(name, "RED", `column ${CF_LABEL} did not appear after defining`, "07-column-RED.png")
+    return record(name, "RED", `definition ${CF_LABEL} did not appear in the panel`, "07-column-RED.png")
   }
 
-  // 3. set it inline on the seeded contact. The affordance is gated on
-  // hydration in the app, so wait for the BUTTON (never click plain text)
-  // and then click ONCE (QWB-52 review 7).
+  // 2b. set it inline on the seeded contact, on the list. The affordance is
+  // gated on hydration in the app, so wait for the BUTTON (never click plain
+  // text) and then click ONCE (QWB-52 review 7).
+  await open("/contacts")
+  await settle(CONTACT_LINKED)
+  if (!(await waitForText(CF_LABEL, 15_000))) {
+    shot("07-column-RED", { full: true })
+    return record(name, "RED", `column ${CF_LABEL} did not appear on the contacts list`, "07-column-RED.png")
+  }
   let editBtn
   editBtn = await clickStable((v) => v.role === "button" && v.name === `Edit ${CF_LABEL}`)
   if (!editBtn) {
@@ -616,14 +690,11 @@ export async function scenarioCustomField(api) {
   shot("07-inline-saved")
 
   // 4. the save must be VISIBLE in the cell, not merely "somewhere on the
-  // page": the definitions panel is still open here and its Options cell
-  // already renders "email, phone, event", so any page-text assertion on
-  // "email" passes even with the merge bug (QWB-52 review 3). Close the
-  // panel, re-snapshot, and require BOTH: the cell's edit button exists AND
-  // the options string is gone AND the bare value text is on the page.
-  if (await clickStable((v) => v.role === "button" && v.name === "Hide custom fields", "Hide custom fields")) {
-    await pause()
-  }
+  // page". The panel is not on the list anymore (F2), so the options string
+  // can only come from a stray panel render: require the cell's edit button
+  // AND the options string absent AND the bare value text on the page
+  // (QWB-52 review 3's merge-bug guard, adapted).
+  await pause()
   snap = snapshot()
   const panelClosed = !snap.text.includes(CF_OPTIONS)
   const cellBtn = Object.entries(snap.refs).find(
@@ -656,18 +727,18 @@ export async function scenarioCustomField(api) {
     )
   }
 
-  // 5. delete the definition; the column disappears on the next metadata
-  // read. The panel was closed for the value assertion above, so reopen it
-  // first. The delete is a two-step confirm in the UI (QWB-52 review 17):
-  // the first click scans how many rows carry a value.
-  const reopenBtn = await clickStable((v) => v.role === "button" && v.name === "Custom fields", "Custom fields")
-  if (!reopenBtn) {
-    shot("07-delete-RED", { full: true })
-    return record(name, "RED", "the Custom fields button is gone after closing the panel", "07-delete-RED.png")
-  }
+  // 5. delete the definition in Settings (F2); the column disappears on the
+  // list's next metadata read. Navigation reset the Entity selector, so
+  // address the contacts cube again. The delete is a two-step confirm in the
+  // UI (QWB-52 review 17): the first click scans how many rows carry a value.
+  await open("/settings")
   if (!(await waitForText("Fields defined at runtime", 15_000))) {
     shot("07-delete-RED", { full: true })
-    return record(name, "RED", "definitions panel did not reopen", "07-delete-RED.png")
+    return record(name, "RED", "the definitions panel is not on the settings page", "07-delete-RED.png")
+  }
+  if (!(await chooseEntity("Contacts"))) {
+    shot("07-delete-RED", { full: true })
+    return record(name, "RED", "the Entity selector did not switch back to Contacts", "07-delete-RED.png")
   }
   snap = snapshot()
   const deleteBtn = await clickStable((v) => v.role === "button" && v.name === `Delete ${CF_LABEL}`)
@@ -682,7 +753,18 @@ export async function scenarioCustomField(api) {
     shot("07-delete-RED", { full: true })
     return record(name, "RED", "the delete confirm step did not appear", "07-delete-RED.png")
   }
-  // The column header must vanish from the snapshot.
+  // The definition row must vanish from the panel...
+  let rowGone = true
+  const panelDeadline = Date.now() + 15_000
+  for (;;) {
+    snap = snapshot()
+    rowGone = !Object.values(snap.refs).some((v) => v.role === "button" && v.name === `Delete ${CF_LABEL}`)
+    if (rowGone || Date.now() >= panelDeadline) break
+    await new Promise((r) => setTimeout(r, 500))
+  }
+  // ...and the column must vanish from the list on its next metadata read.
+  await open("/contacts")
+  await settle(CONTACT_LINKED)
   let columnGone = true
   const deadline = Date.now() + 15_000
   for (;;) {
@@ -692,26 +774,26 @@ export async function scenarioCustomField(api) {
     await new Promise((r) => setTimeout(r, 500))
   }
   shot("07-column-gone")
-  // The delete is a write too: a header vanishing from the page is not proof
-  // qwbe dropped the definition. Read the definitions back.
+  // Both vanishings are page reads, not proof qwbe dropped the definition.
+  // Read the definitions back.
   const stillDefined = (await definitionRows(api, "crm/contacts")).some((r) => r.name === CF_NAME)
-  const deleted = columnGone && !stillDefined
+  const deleted = rowGone && columnGone && !stillDefined
   return record(
     name,
     deleted ? "PASS" : "RED",
     deleted
-      ? "column appeared, was set inline, the saved value is in the cell and in the backend, and the definition is gone from both after the confirmed delete"
-      : `after delete: column gone=${columnGone}, still defined in qwbe=${stillDefined}; page text: ${snap.text.replace(/\s+/g, " ").slice(0, 300)}`,
+      ? "column appeared, was set inline, the saved value is in the cell and in the backend, and the definition is gone from the panel, the list and qwbe after the confirmed delete"
+      : `after delete: row gone=${rowGone}, column gone=${columnGone}, still defined in qwbe=${stillDefined}; page text: ${snap.text.replace(/\s+/g, " ").slice(0, 300)}`,
     "07-column-gone.png",
   )
 }
 
 // --- 8. the permission half (QWB-52 review 8) ------------------------------------
-// A reader (customfields:read only, no customfields:write) sees NO definitions
-// panel on the contacts list, and a direct call to the definition endpoints
-// answers 403 from qwbe. Runs AFTER the logout scenario: logging in as the
-// reader replaces the browser's session cookie, and the admin scenarios are
-// done by then.
+// A reader (customfields:read only, no customfields:write) gets the Settings
+// area's refusal message instead of the definitions panel (F2 moved the panel
+// there), and a direct call to the definition endpoints answers 403 from
+// qwbe. Runs AFTER the logout scenario: logging in as the reader replaces the
+// browser's session cookie, and the admin scenarios are done by then.
 export async function scenarioReader(qwbePort) {
   const name = "a reader sees no definitions panel and the definition API refuses the write"
   if (!(await loginThroughUi("reader", "reader"))) {
@@ -723,22 +805,22 @@ export async function scenarioReader(qwbePort) {
     shot("08-reader-RED", { full: true })
     return record(name, "RED", `reader login through the UI failed; fields: ${fields.result}`, "08-reader-RED.png")
   }
+  await open("/settings")
+  // The refusal message is the reader's view of the settings page. Settle on
+  // IT, not on "Settings": the nav link carries that label on every page.
+  const told = await waitForText("does not have", 15_000)
   let snap = snapshot()
-  await open("/contacts")
-  // The seeded rows belong to the admin, and entity permissions are
-  // per-owner: a reader sees an empty list (or the access alert), NOT the
-  // seeded contact. Settle on the page heading, never on a seeded row.
-  await settle("Contacts")
-  snap = snapshot()
-  shot("08-reader-contacts")
-  if (snap.text.includes(CONTACT_LINKED)) {
+  shot("08-reader-settings")
+  const noPanel = !snap.text.includes("Fields defined at runtime")
+  const noAdd = !Object.values(snap.refs).some((v) => v.role === "button" && v.name === "Add field")
+  if (!told || !noPanel || !noAdd) {
     shot("08-reader-RED", { full: true })
-    return record(name, "RED", "unexpected: the reader sees admin-owned rows", "08-reader-RED.png")
-  }
-  const panelBtn = refFor(snap.refs, (n) => n === "Custom fields")
-  if (panelBtn) {
-    shot("08-reader-RED", { full: true })
-    return record(name, "RED", "the reader sees a Custom fields button", "08-reader-RED.png")
+    return record(
+      name,
+      "RED",
+      `the reader sees management UI on /settings (message=${told}, noPanel=${noPanel}, noAdd=${noAdd})`,
+      "08-reader-RED.png",
+    )
   }
   // Direct calls against qwbe itself, with a reader session of its own:
   // qwbe must refuse the write, not the proxy.
@@ -909,18 +991,18 @@ async function definitionRows(api, cube) {
 export async function scenarioCustomFieldTypes(api, seed) {
   const name = "bool, number and date custom fields set inline; an emptied required text field is refused"
   await dropDefinitions(api, "crm/contacts", [V_NAME, B_NAME, D_NAME, N_NAME])
-  await open("/contacts")
-  await settle(CONTACT_LINKED)
-  let snap = snapshot()
-  const panelBtn = await clickStable((v) => v.role === "button" && v.name === "Custom fields", "Custom fields")
-  if (!panelBtn) {
-    shot("09-panel-RED", { full: true })
-    return record(name, "RED", "no Custom fields button on the contacts list", "09-panel-RED.png")
-  }
+
+  // Definitions are made in Settings (F2), on the contacts entity.
+  await open("/settings")
   if (!(await waitForText("Fields defined at runtime", 15_000))) {
     shot("09-panel-RED", { full: true })
-    return record(name, "RED", "definitions panel did not open", "09-panel-RED.png")
+    return record(name, "RED", "the definitions panel is not on the settings page", "09-panel-RED.png")
   }
+  if (!(await chooseEntity("Contacts"))) {
+    shot("09-entity-RED", { full: true })
+    return record(name, "RED", "the Entity selector did not switch to Contacts", "09-entity-RED.png")
+  }
+  let snap = snapshot()
 
   const failures = []
   for (const [n, l, t, o, req] of [
@@ -937,12 +1019,20 @@ export async function scenarioCustomFieldTypes(api, seed) {
     shot("09-define-RED", { full: true })
     return record(name, "RED", failures.join("; "), "09-define-RED.png")
   }
-  const columnShown = await waitForText(N_LABEL, 15_000)
-  if (!columnShown) {
-    shot("09-column-RED", { full: true })
-    return record(name, "RED", "the note column did not appear after defining", "09-column-RED.png")
+  const definedShown = await waitForText(N_LABEL, 15_000)
+  if (!definedShown) {
+    shot("09-define-RED", { full: true })
+    return record(name, "RED", "the definitions did not appear in the panel", "09-define-RED.png")
   }
-  shot("09-columns-appear")
+  shot("09-definitions-appear")
+
+  // The values are set inline on the contacts list, like any other cell.
+  await open("/contacts")
+  await settle(CONTACT_LINKED)
+  if (!(await waitForText(N_LABEL, 15_000))) {
+    shot("09-column-RED", { full: true })
+    return record(name, "RED", "the note column did not appear on the contacts list", "09-column-RED.png")
+  }
 
   // Set the number field inline through the text editor.
   let ok = true
@@ -1057,7 +1147,15 @@ export async function scenarioCustomFieldTypes(api, seed) {
     custom[D_NAME] === "2026-01-02" &&
     custom[N_NAME] === "hello"
 
-  // Clean up every definition (two-step confirm; the panel is still open).
+  // Clean up every definition in Settings (two-step confirm); navigation
+  // reset the Entity selector, so address the contacts cube again.
+  await open("/settings")
+  if (!(await waitForText("Fields defined at runtime", 15_000))) {
+    return record(name, "RED", "the definitions panel is not on the settings page for cleanup", "09-cleanup-RED.png")
+  }
+  if (!(await chooseEntity("Contacts"))) {
+    return record(name, "RED", "the Entity selector did not switch back to Contacts for cleanup", "09-cleanup-RED.png")
+  }
   const cleaned =
     (await deleteField(V_LABEL)) &&
     (await deleteField(B_LABEL)) &&
@@ -1098,6 +1196,7 @@ export async function runAll(api, seed) {
   verdicts.push(await scenarioInlineEdit(api))
   verdicts.push(await scenarioNonEditable(api))
   verdicts.push(await scenarioNavigation(seed))
+  verdicts.push(await scenarioCreateOrganization(api))
   verdicts.push(await scenarioCustomField(api))
   verdicts.push(await scenarioCustomFieldTypes(api, seed))
   verdicts.push(await scenarioLogout())
