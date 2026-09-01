@@ -32,16 +32,16 @@ const findByName = async (api, cube, name) => {
 
 /** Create whatever is missing; return { orgA, orgB, contactLinked, contactFree }. */
 export async function seedUp(api, log = console.log) {
-  let orgA = await findByName(api, "accounts", ORG_A)
+  let orgA = await findByName(api, "organizations", ORG_A)
   if (!orgA) {
-    const r = await api.call("/accounts", { method: "POST", body: { name: ORG_A, billingCity: CITY_BASELINE, industry: "manufacturing", employees: 42 } })
+    const r = await api.call("/organizations", { method: "POST", body: { name: ORG_A, billingCity: CITY_BASELINE, industry: "manufacturing", employees: 42 } })
     if (r.status !== 200) throw new Error(`seed: create ${ORG_A} failed http ${r.status}: ${JSON.stringify(r.body).slice(0, 200)}`)
     orgA = r.body
     log(`seed: created organization ${ORG_A} (${orgA.id})`)
   }
-  let orgB = await findByName(api, "accounts", ORG_B)
+  let orgB = await findByName(api, "organizations", ORG_B)
   if (!orgB) {
-    const r = await api.call("/accounts", { method: "POST", body: { name: ORG_B, billingCity: "E2E City Beta", industry: "logistics", employees: 7 } })
+    const r = await api.call("/organizations", { method: "POST", body: { name: ORG_B, billingCity: "E2E City Beta", industry: "logistics", employees: 7 } })
     if (r.status !== 200) throw new Error(`seed: create ${ORG_B} failed http ${r.status}: ${JSON.stringify(r.body).slice(0, 200)}`)
     orgB = r.body
     log(`seed: created organization ${ORG_B} (${orgB.id})`)
@@ -79,8 +79,8 @@ export async function seedDown(api) {
   for (const [cube, name] of [
     ["contacts", CONTACT_LINKED],
     ["contacts", CONTACT_FREE],
-    ["accounts", ORG_A],
-    ["accounts", ORG_B],
+    ["organizations", ORG_A],
+    ["organizations", ORG_B],
   ]) {
     const row = await findByName(api, cube, name)
     if (row) {

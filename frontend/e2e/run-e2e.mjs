@@ -236,6 +236,12 @@ pids.push(
       // and let the per-machine records in QWBE_DATA_DIR still catch drift
       // between runs. The staleness itself is reported, not hidden.
       `QWBE_CUBE_VERSIONS_BASELINE=${join(CONFIG.workDir, "empty-cube-versions.json")} ` +
+      // The scratch data dir is deleted on every run, so the migration ownership
+      // registry is empty at boot: the kernel refuses any declared dataMigration
+      // without a pre-ledger authorization (kernel ticket 08). The three legacy
+      // sources this pack declares are authorized here, exactly as the throwaway
+      // bench in tools/import.test.mjs does.
+      `QWBE_LEGACY_MIGRATIONS=contacts:crm-pack,contracts:crm-pack,crm/accounts:crm-pack ` +
       `QWBE_READER_PASSWORD=reader QWBE_MOUNTED=${CONFIG.mounted} ` +
       `QWBE_ALLOWED_ORIGINS=http://localhost:${fePort} node src/main.ts`,
     qwbeLog,
