@@ -61,11 +61,15 @@ describe("organizations cube contract", () => {
     assert.deepEqual(cube.manifest.publishes, ["crm/organizations.created"])
   })
 
-  it("declares no predecessor, honestly (QWB-54, ticket 12)", () => {
+  it("declares its predecessor honestly (QWB-54, tickets 12 and 14)", () => {
     // The manifest once claimed a migration from a cube that never existed, invented to pass
-    // a hierarchy gate. The fiction is gone: this cube has no predecessor and says so by
-    // declaring nothing. The kernel-side refusal of invented sources is ticket 08.
-    assert.equal(cube.manifest.dataMigration, undefined)
+    // a hierarchy gate; ticket 12 then removed it together with the lie "no predecessor".
+    // Both were wrong: this cube IS the old crm/accounts, renamed. The declaration names it,
+    // and the kernel's ledger -- not the claim -- decides whether crm/accounts really belonged
+    // to crm-pack (checked at boot; the schema is renamed, never copied).
+    assert.deepEqual(cube.manifest.dataMigration, [
+      { fromCube: "crm/accounts", toCube: "crm/organizations", fromPlugin: "crm-pack" },
+    ])
   })
 
   it("owns exactly its own table", () => {

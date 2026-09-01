@@ -30,7 +30,11 @@ const score = makeScore()
 const port = await freePort()
 const data = scratchDataDir("crm")
 const api = client(port)
-const server = await startServer(port, { QWBE_DATA_DIR: data })
+// The scratch ledger has no record of crm/accounts (the organizations cube's declared
+// predecessor, QWB-54 ticket 14): the boot authorizes its own pre-ledger history, exactly
+// like the throwaway bench in tools/import.test.mjs.
+const LEGACY = { QWBE_LEGACY_MIGRATIONS: "crm/accounts:crm-pack" }
+const server = await startServer(port, { QWBE_DATA_DIR: data, ...LEGACY })
 
 if (!server.alive) {
   dropScratch(data)
@@ -318,6 +322,7 @@ try {
     const s2 = await startServer(p2, {
       QWBE_DATA_DIR: d2,
       QWBE_MOUNTED: `auth,account,settings,cli,crm,${only}`,
+      ...LEGACY,
     })
     if (!s2.alive) {
       score.check(`${only} boots without the other cube`, false, s2.output.split("\n").slice(-3).join(" "))

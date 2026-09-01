@@ -42,9 +42,11 @@ describe("CRM source package boundary", () => {
     assert.deepEqual(contracts.manifest.dataMigration, [
       { fromCube: "contracts", toCube: "crm/contracts", fromPlugin: "crm-pack" },
     ])
-    // One name everywhere (QWB-54, ticket 12): the cube is crm/organizations and it declares
-    // no predecessor, honestly — the invented migration from a never-existing cube is gone.
-    assert.equal(organizations.manifest.dataMigration, undefined)
+    // One name everywhere (QWB-54, ticket 12): the cube is crm/organizations and its
+    // predecessor is declared, not invented (QWB-54, ticket 14) — it IS the old crm/accounts.
+    assert.deepEqual(organizations.manifest.dataMigration, [
+      { fromCube: "crm/accounts", toCube: "crm/organizations", fromPlugin: "crm-pack" },
+    ])
     assert.deepEqual(organizations.manifest.tables, ["organizations"])
     // QWB-54, ticket 13: the importable cubes carry externalId, published as a list filter
     // (that filter IS the import's lookup); uniqueness lives in the DATABASE, guarded by the
@@ -52,8 +54,8 @@ describe("CRM source package boundary", () => {
     // importable (no mapping, no import writes it), so it declares no external identity.
     assert.equal(organizations.manifest.version, "1.1.0")
     assert.deepEqual(organizations.manifest.searchable, ["name", "industry", "externalId"])
-    assert.equal(contacts.manifest.version, "1.2.0")
-    assert.deepEqual(contacts.manifest.searchable, ["externalId"])
+    assert.equal(contacts.manifest.version, "1.3.0")
+    assert.deepEqual(contacts.manifest.searchable, ["name", "email", "externalId"])
     assert.equal(contracts.manifest.searchable, undefined)
   })
 })

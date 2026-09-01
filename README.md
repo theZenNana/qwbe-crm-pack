@@ -51,12 +51,21 @@ rename it is one name everywhere:
   place "account" legitimately remains. Our side of that mapping targets
   `organizationNo` / `organizationType`.
 
-## No predecessor, declared honestly (QWB-54, tickets 08 and 12)
+## The predecessor, declared honestly (QWB-54, tickets 08, 12 and 14)
 
-The organizations cube declares **no `dataMigration`**: there is no cube it could honestly
-name as its source. The manifest once invented a migration from a cube called "organizations"
-that never existed, to satisfy a hierarchy gate — the fiction is deleted, and the kernel side
-that refuses an invented `dataMigration.from` is ticket 08.
+The organizations cube IS the old `crm/accounts`, renamed — so its manifest declares exactly
+that `dataMigration` (`fromCube: "crm/accounts"`, `fromPlugin: "crm-pack"`). Postgres schemas
+are named after the cube (`crm--accounts` → `crm--organizations`), so the kernel moves the
+schema at mount instead of booting the renamed cube on an empty one. The provenance ledger,
+not the manifest's claim, decides whether `crm/accounts` really belonged to crm-pack. (The
+manifest once invented a migration from a cube called "organizations" that never existed, to
+satisfy a hierarchy gate; the invented source is gone, the honest one is declared, and the
+kernel side that refuses an unattributable source is ticket 08.) Rows migrated from the old
+cube still carry the pre-rename field names `accountNo`/`accountType` in their body; the
+one-shot backfill (`tools/backfill-contact-organizationid.mjs`) renames those keys once, in
+the data. Operator note: `migrateDataSchemas` refuses when the destination schema already
+exists — a system that already booted with the new cube name must drop the empty
+`crm--organizations` schema first.
 
 ## The relation to the Organization (decided QWB-47, replacing the old limit)
 
@@ -141,16 +150,19 @@ The map tool needs a database connection (`QWBE_DATABASE_URL`, or `QWBE_PG_PASSW
 optional `QWBE_PG_HOST/PORT/USER`) alongside the API credentials, because of the index. Rows
 stored before this ticket lack the `externalId` KEY; the one-shot backfill
 (`tools/backfill-contact-organizationid.mjs`) fills it with null on both cubes, the same way
-it fills `organizationId` on contacts.
+it fills `organizationId` on contacts, and renames the pre-ticket-12 field keys inside
+organizations (`accountNo` → `organizationNo`, `accountType` → `organizationType`).
 
 ## Versions
 
 Cubes that declare a `version` in their manifest are tracked by the kernel's metadata drift
 gate: the same version with a different schema hash refuses to boot. Bump the version on any
-schema change (QWB-54, ticket 20). History: `crm/contacts` is at 1.2.0 (1.1.0: the relation
+schema change (QWB-54, ticket 20). History: `crm/contacts` is at 1.3.0 (1.1.0: the relation
 field was renamed `accountId` → `organizationId`, ticket 12; 1.2.0: `externalId` added,
-ticket 13); `crm/organizations` is at 1.1.0 (1.0.0 at the rename — a first-seen cube name,
-ticket 20; 1.1.0: `externalId` added, ticket 13); `crm/contracts` is at 1.0.0.
+ticket 13; 1.3.0: searchable widened to name/email, ticket 14); `crm/organizations` is at
+1.1.0 (1.0.0 at the rename — the old `crm/accounts` data moves with the declared
+`dataMigration`, ticket 14; 1.1.0: `externalId` added, ticket 13); `crm/contracts` is at
+1.0.0.
 
 ## Layout
 
@@ -181,3 +193,5 @@ npm run typecheck
 # runtime probe (starts its own server on a scratch data dir)
 QWBE_REPO=<qwbe> node probes/crm.mjs
 ```
+
+This pack is not yet gated by `qwbe check`; tracked as follow-up.

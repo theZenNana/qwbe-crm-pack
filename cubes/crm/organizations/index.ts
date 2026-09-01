@@ -101,10 +101,15 @@ const manifest = {
     { name: "crm/organizations:write", roles: ["admin"] },
   ],
   publishes: ["crm/organizations.created"],
-  // No dataMigration, declared honestly (QWB-54, ticket 12): this cube has no predecessor.
-  // The previous manifest invented a migration from a cube called "organizations" that never
-  // existed, to satisfy a hierarchy gate; the fiction is gone, and the kernel side that
-  // refuses invented sources is ticket 08.
+  // The predecessor is declared, not invented (QWB-54, tickets 12 and 14): this cube IS the
+  // old `crm/accounts`, renamed. Postgres schemas are named after the cube, so without this
+  // declaration the renamed cube would boot on an empty `crm--organizations` schema while the
+  // rows stayed in `crm--accounts`. The kernel's `migrateDataSchemas` moves the schema, and
+  // the provenance LEDGER -- not this claim -- decides whether crm/accounts really belonged
+  // to crm-pack (checked at boot; kernel migrate-ownership.ts). Rows from before the field
+  // rename still carry `accountNo`/`accountType` in their body: the one-shot backfill
+  // (tools/backfill-contact-organizationid.mjs) renames those keys once, in the data.
+  dataMigration: [{ fromCube: "crm/accounts", toCube: "crm/organizations", fromPlugin: "crm-pack" }],
 }
 
 export const cube = defineCube(group, {

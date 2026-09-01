@@ -6,19 +6,23 @@
 // normalizing every response -- a hand-written handler is exactly what ticket 07 removes --
 // so instead the absence is fixed once, in the data.
 //
-// Two keys today:
+// Three kinds of fix today:
 //   - `organizationId` on contacts: rows stored before the organizations cube existed (the
 //     key's name is organizationId since the one-name rename, ticket 12).
 //   - `externalId` on contacts and organizations: the external identity of the vtiger import
 //     (QWB-54, ticket 13). Rows created by hand have no source system; they gain the key
 //     with a null value, and the partial unique index ignores nulls.
+//   - the field RENAME inside organizations (QWB-54, ticket 14): rows migrated from the old
+//     crm/accounts cube carry the old field names `accountNo`/`accountType`; the renamed
+//     schema serves `organizationNo`/`organizationType` and a row missing them fails
+//     response encoding. Each old key moves to its new name in the same jsonb body.
 //
 // Idempotent: `body ? 'key'` is true iff the key exists (null included), so rows that carry
 // the key are never touched and a second run changes nothing. Safe against a live store: one
 // UPDATE per (schema, table, key), matched only on rows that lack the key.
 //
-// Targets, all three: crm--contacts.contacts (organizationId, externalId) and
-// crm--organizations.organizations (externalId).
+// Targets, all four steps: crm--contacts.contacts (organizationId, externalId),
+// crm--organizations.organizations (externalId, plus the accountNo/accountType rename).
 //
 // Connection (same contract as the qwbe probes, no password default):
 //   QWBE_DATABASE_URL=postgres://... node tools/backfill-contact-organizationid.mjs
@@ -37,6 +41,21 @@ export const backfillMissingKey = async (pool, schema, table, key) => {
   const result = await pool.query(fillKeySql(schema, table, key))
   return result.rowCount ?? 0
 }
+
+/**
+ * The rename statement (QWB-54, ticket 14): moves each old key into its new name inside the
+ * same jsonb body, deleting the old keys. The whole expression reads the OLD row, so the new
+ * keys are built from values that are still there; `body ? '<old>'` makes it idempotent -- a
+ * renamed row no longer carries the old key, so a second run changes nothing.
+ */
+export const renameAccountKeysSql = (schema, table) =>
+  `UPDATE "${schema}"."${table}" SET body = (body - 'accountNo' - 'accountType') || ` +
+    `jsonb_build_object('organizationNo', body->'accountNo', 'organizationType', body->'accountType') ` +
+    `WHERE body ? 'accountNo'`
+
+/** Renames accountNo/accountType to their organization* names; returns the rows moved. */
+export const renameOrganizationKeys = (pool, schema = "crm--organizations", table = "organizations") =>
+  pool.query(renameAccountKeysSql(schema, table)).then((r) => r.rowCount ?? 0)
 
 export const backfillOrganizationId = (pool, schema = "crm--contacts", table = "contacts") =>
   backfillMissingKey(pool, schema, table, "organizationId")
@@ -75,6 +94,8 @@ if (isMain) {
       const n = await backfillMissingKey(pool, t.schema, t.table, t.key)
       console.log(`backfill done: ${n} ${t.table} row(s) gained ${t.key} = null`)
     }
+    const renamed = await renameOrganizationKeys(pool)
+    console.log(`backfill done: ${renamed} organizations row(s) renamed accountNo/accountType`)
   } finally {
     await pool.end()
   }

@@ -5,14 +5,16 @@
 // password comes from QWBE_PG_PASSWORD, never a default):
 //   1. only rows WITHOUT the organizationId key gain `organizationId = null`;
 //   2. rows that carry the key -- null or a value -- are untouched;
-//   3. a second run changes nothing (idempotent), including the reported count.
+//   3. a second run changes nothing (idempotent), including the reported count;
+//   4. the accountNo/accountType rename moves the old keys to organizationNo/organizationType
+//      and a second run changes nothing (QWB-54, ticket 14).
 //
 // Requires a reachable Postgres (QWBE_PG_HOST/PORT/USER/PASSWORD, port 5433 by default).
 
 import assert from "node:assert/strict"
 import { after, before, describe, it } from "node:test"
 import pg from "pg"
-import { backfillExternalId, backfillOrganizationId } from "./backfill-contact-organizationid.mjs"
+import { backfillExternalId, backfillOrganizationId, renameOrganizationKeys } from "./backfill-contact-organizationid.mjs"
 
 const url = () => {
   if (!process.env.QWBE_PG_PASSWORD) throw new Error("set QWBE_PG_PASSWORD in the environment (no password default)")
@@ -98,5 +100,37 @@ describe("the one-shot externalId backfill (QWB-54, ticket 13)", () => {
   it("is idempotent: a second run reports zero and changes nothing", async () => {
     assert.equal(await backfillExternalId(pool, SCHEMA, TABLE), 0)
     assert.equal((await bodyOf("ext")).externalId, "vtiger:55")
+  })
+})
+
+describe("the accountNo/accountType rename (QWB-54, ticket 14)", () => {
+  // Organizations migrated from the old crm/accounts cube carry the pre-rename field names;
+  // the renamed schema requires organizationNo/organizationType (present, nullable), so a
+  // row still holding the old keys fails response encoding.
+  before(async () => {
+    await pool.query(
+      `INSERT INTO "${SCHEMA}"."${TABLE}" (id, type, body) VALUES
+         ('acct', 'Organization', '{"id":"acct","type":"Organization","name":"Old Names","accountNo":"ACC-1","accountType":"Customer"}'),
+         ('org', 'Organization', '{"id":"org","type":"Organization","name":"New Names","organizationNo":"ORG-1","organizationType":"Partner"}')`,
+    )
+  })
+
+  it("moves the old keys to the new names, deleting the old ones", async () => {
+    const n = await renameOrganizationKeys(pool, SCHEMA, TABLE)
+    assert.equal(n, 1) // only 'acct' still carries accountNo
+    assert.deepEqual(await bodyOf("acct"), {
+      id: "acct",
+      type: "Organization",
+      name: "Old Names",
+      organizationNo: "ACC-1",
+      organizationType: "Customer",
+    })
+    assert.equal((await bodyOf("org")).organizationNo, "ORG-1")
+  })
+
+  it("is idempotent: a second run reports zero and changes nothing", async () => {
+    assert.equal(await renameOrganizationKeys(pool, SCHEMA, TABLE), 0)
+    assert.equal((await bodyOf("acct")).accountNo, undefined)
+    assert.equal((await bodyOf("acct")).organizationNo, "ACC-1")
   })
 })
