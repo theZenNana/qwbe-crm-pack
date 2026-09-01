@@ -12,9 +12,9 @@
 //
 //   QWBE_REPO=~/Projects/qwbe node probes/crm.mjs
 //
-// The plugin must be installed first (QWB-31):
-//   POST /settings/packages/install-from {"path": "~/Projects/qwbe-packs/plugins/crm-pack"}
-// and the server restarted, or simply copy this directory to <qwbe>/core/plugins/crm-pack.
+// The plugin must be installed first - the official path (QWB-54, ticket 22):
+//   settings:install-from <this directory>  (or POST /settings/packages/install-from)
+// and the server restarted. Never a hand copy into core/plugins.
 // The probe refuses to run if the cubes are not mounted, rather than proving nothing.
 
 import { existsSync } from "node:fs"

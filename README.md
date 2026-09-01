@@ -3,8 +3,26 @@
 Rebuilt on 2026-08-12 from the verified historical copy (this directory before the rewrite —
 SHA-256 recorded in `../MANIFEST.sha256` and in `qwbe/docs/crm-history-research.md`). Not a Git
 history rewrite: the old files were the source material, adapted onto the current public cube
-contract (`qwbe-core/cube`, `defineCube`). Installable via
-`POST /settings/packages/install-from` pointing at this directory.
+contract (`qwbe-core/cube`, `defineCube`).
+
+## Installing: the official path (QWB-54, ticket 22)
+
+No manual copy anywhere: the kernel installs a package FROM its repository directory. Against
+a running kernel with the settings cube mounted:
+
+    settings:install-from /home/lucian/Projects/Qwbe/plugins/crm-pack
+
+(or `POST /settings/packages/install-from` pointing at this directory). Staging runs the
+source contract the kernel enforces at boot and refuses a package that breaks it; the store
+copy records where it came from and when (`qwbe-source.json`). Freshness is provable, not
+assumed - both checks exit 1 on drift:
+
+    node probes/source-drift.mjs              # this pack: store shelf and installed copy
+    node ../../qwbe/core/bin/qwbe.mjs drift   # every shelf in the kernel's store
+
+`start-crm-local.sh` is gone (QWB-54, ticket 22): it installed the pack by hand-copying into
+`core/plugins`, the exact path this ticket removes. Install with the command above, then
+start the kernel the qwbe way; the frontend runs from `frontend/` with `npm run dev`.
 
 ## Domain model — the decided vocabulary
 
@@ -145,6 +163,7 @@ cubes/crm/contacts/index.ts        Contact: table, API, schemas, permissions, co
 cubes/crm/contracts/index.ts       Contract: table, API, schemas, permissions, commands
 cubes/crm/*/index.test.ts          source-local contract tests
 probes/crm.mjs                     runtime proof against a live kernel (scratch QWBE_DATA_DIR)
+probes/source-drift.mjs            copy freshness: store shelf + installed copy vs this repo
 ```
 
 The cubes do not import each other. All use only exported `qwbe-core/*` package subpaths.

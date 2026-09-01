@@ -177,6 +177,13 @@ describe("import chain end-to-end (synthetic fixture, throwaway kernel)", { skip
         QWBE_ADMIN_PASSWORD: "admin",
         QWBE_READER_PASSWORD: "reader",
         QWBE_DATABASE_URL: dbUrl,
+        // The throwaway bench authorizes its own pre-ledger history (kernel ticket 08, fe7fdf4):
+        // the two importable cubes honestly declare the legacy standalone cubes as their
+        // sources, and the kernel checkout's own example-plugin travels with the copied core.
+        // A fresh database has no ledger record of any of them yet.
+        // ponytail: this list follows whatever declares dataMigration under core/plugins of
+        // the checked-out kernel; today that is example-plugin's booktags only.
+        QWBE_LEGACY_MIGRATIONS: "contacts:crm-pack,contracts:crm-pack,bookmarks:example-plugin,tags:example-plugin",
       },
       stdio: ["ignore", "pipe", "pipe"],
     })
