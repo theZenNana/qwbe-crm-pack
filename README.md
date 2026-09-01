@@ -123,6 +123,28 @@ independence, and exercise the party id as data (set, nullable, opaque).
 fractions at the boundary. Totals are rendered **per currency**, never summed across
 currencies: `contracts:value` and the summary both follow that rule.
 
+## Demo data (generated, never committed)
+
+The sandbox is populated by a generator, not by data: 50 organizations, 50 contacts and 5
+contracts, linked (contact → organization, contract → organization via `partyId`), plus the
+custom fields they carry — field STRUCTURE mirrored from the source system's custom fields
+(names, types, required flags), with synthetic values and synthetic picklist options. No row
+from the source system is ever read, and nothing generated is committed: the seed script is
+the only artifact, the data lives in the local database.
+
+```sh
+node tools/seed-demo.mjs            # create what is missing (defs first, then rows)
+node tools/seed-demo.mjs --wipe     # wipe demo rows + demo defs, then rebuild
+```
+
+The same seed always produces the same rows (deterministic, index-derived — no faker), and a
+rerun fills only what is missing: it never rewrites a row that is already there, so edits
+made through the UI survive a rerun. `--wipe` needs `QWBE_DATABASE_URL` (the same connection
+the kernel runs with): the cubes have no DELETE endpoints, so demo rows are removed directly
+in Postgres. Demo rows mark themselves with `externalId: demo:*` (and the demo contracts
+with their deterministic titles); anything created by hand or by the vtiger import is never
+touched and is reported as left in place.
+
 ## The external identity and the idempotent import (QWB-54, ticket 13)
 
 Every IMPORTABLE cube carries **`externalId`** — the row's own identity from its source
