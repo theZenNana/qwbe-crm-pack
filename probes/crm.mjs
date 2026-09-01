@@ -30,10 +30,15 @@ const score = makeScore()
 const port = await freePort()
 const data = scratchDataDir("crm")
 const api = client(port)
-// The scratch ledger has no record of crm/accounts (the organizations cube's declared
-// predecessor, QWB-54 ticket 14): the boot authorizes its own pre-ledger history, exactly
-// like the throwaway bench in tools/import.test.mjs.
-const LEGACY = { QWBE_LEGACY_MIGRATIONS: "crm/accounts:crm-pack" }
+// The scratch ledger has no record of any legacy cube on a fresh data dir: the boot
+// authorizes its own pre-ledger history, exactly like the throwaway bench in
+// tools/import.test.mjs. The full list, not a subset -- the pack declares three sources
+// (contacts, contracts, crm/accounts) and the kernel checkout's own example-plugin
+// declares two more (bookmarks, tags); one unattributable source refuses the boot.
+const LEGACY = {
+  QWBE_LEGACY_MIGRATIONS:
+    "contacts:crm-pack,contracts:crm-pack,crm/accounts:crm-pack,bookmarks:example-plugin,tags:example-plugin",
+}
 const server = await startServer(port, { QWBE_DATA_DIR: data, ...LEGACY })
 
 if (!server.alive) {
