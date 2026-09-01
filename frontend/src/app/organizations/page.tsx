@@ -6,7 +6,11 @@ export default function OrganizationsPage() {
   return (
     <main className="mx-auto flex w-full max-w-7xl flex-col gap-4 p-4">
       <h1 className="text-xl font-semibold">Organizations</h1>
-      <CubeList cube="crm/organizations" />
+      <CubeList
+        cube="crm/organizations"
+        createHref="/organizations/new"
+        addLabel="Add organization"
+      />
     </main>
   )
 }

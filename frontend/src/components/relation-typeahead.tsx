@@ -43,11 +43,17 @@ export function RelationTypeahead({
   field,
   value,
   onChange,
+  // "filter" (default) is the list filter row: the aria labels say Filter by /
+  // Clear ... filter and the empty input's placeholder is All. "form" is the
+  // create-form picker (QWB-54, F1): same combobox behaviour, labels that name
+  // the field instead of the filter.
+  variant = "filter",
 }: {
   field: FieldMetadata
   // The current filter value: the related row's opaque id, or "" for all.
   value: string
   onChange: (id: string) => void
+  variant?: "filter" | "form"
 }) {
   const target = field.relation!.target
   const [targetMeta, setTargetMeta] = useState<CubeMetadata | null>(null)
@@ -186,6 +192,8 @@ export function RelationTypeahead({
 
   const noSearchable = targetMeta !== null && !targetMeta.fields.some((f) => f.searchable)
 
+  const clearLabel = variant === "form" ? `Clear ${field.label}` : `Clear ${field.label} filter`
+
   return (
     <div className="flex items-center gap-2">
       <span className="text-sm text-muted-foreground">{field.label}</span>
@@ -194,13 +202,13 @@ export function RelationTypeahead({
           <Input
             className="w-64"
             role="combobox"
-            aria-label={`Filter by ${field.label}`}
+            aria-label={variant === "form" ? field.label : `Filter by ${field.label}`}
             aria-expanded={open}
             aria-controls={open ? listboxId : undefined}
             aria-autocomplete="list"
             aria-activedescendant={open && active >= 0 ? `${listboxId}-${active}` : undefined}
             value={text}
-            placeholder={value === "" ? "All" : undefined}
+            placeholder={value === "" && variant === "filter" ? "All" : undefined}
             onChange={(e) => {
               const next = e.target.value
               setText(next)
@@ -235,7 +243,7 @@ export function RelationTypeahead({
             <Button
               variant="ghost"
               size="sm"
-              aria-label={`Clear ${field.label} filter`}
+              aria-label={clearLabel}
               onClick={clear}
             >
               ✕

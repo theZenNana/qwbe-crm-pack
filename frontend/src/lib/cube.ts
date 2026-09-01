@@ -359,6 +359,29 @@ export function coerce(field: FieldMetadata, value: string): unknown {
   return value
 }
 
+// The body of a create request, built from the form's string values with the
+// SAME coerce the inline editor saves with. Untouched fields (empty after
+// trim) are skipped, so the payload carries only what was filled and the
+// create schema's defaults apply to the rest; a required field left empty is
+// reported by its label, so the form can refuse the submit with qwbe's own
+// field names instead of a 400 round trip.
+export function createPayloadOf(
+  fields: FieldMetadata[],
+  values: Record<string, string>,
+): { payload: Record<string, unknown>; missing: string[] } {
+  const payload: Record<string, unknown> = {}
+  const missing: string[] = []
+  for (const field of fields) {
+    const value = (values[field.name] ?? "").trim()
+    if (value === "") {
+      if (field.required) missing.push(field.label)
+    } else {
+      payload[field.name] = coerce(field, value)
+    }
+  }
+  return { payload, missing }
+}
+
 export type SaveResult =
   | { status: "unchanged" }
   | { status: "saved"; field: string; value: unknown }

@@ -70,6 +70,12 @@ type EditState = { id: string; field: string; value: string }
 export function CubeList({
   cube,
   fixedFilters,
+  // The create flow (QWB-54, F1): when the caller names the create route, the
+  // list carries a visible Add button (header row, and the primary action of
+  // the empty state). A list without one -- for example the derived contacts
+  // of one organization on the detail page -- renders no button.
+  createHref,
+  addLabel = "Add",
   // Only the top-level list owns the definitions panel: an embedded child list
   // (for example the contacts of one organization on the detail page) renders
   // none, so a detail page does not show a second panel and does not fire a
@@ -80,6 +86,8 @@ export function CubeList({
   // Server-side equality filters pinned by the caller (for example the derived
   // contact list of one organization). Values are opaque ids.
   fixedFilters?: Record<string, string>
+  createHref?: string
+  addLabel?: string
   topLevel?: boolean
 }) {
   const [meta, setMeta] = useState<CubeMetadata | null>(null)
@@ -267,6 +275,13 @@ export function CubeList({
 
   return (
     <div className="flex flex-col gap-4">
+      {createHref && (
+        <div className="flex justify-end">
+          <Button asChild>
+            <Link href={createHref}>{addLabel}</Link>
+          </Button>
+        </div>
+      )}
       <CustomFieldsPanel cube={cube} onChanged={reloadMeta} rendered={topLevel} />
       {searchableFields
         .filter((f) => !fixedFilters?.[f.name])

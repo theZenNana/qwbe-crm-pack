@@ -13,6 +13,7 @@ import {
   canDefineFields,
   canEdit,
   columnsFromFields,
+  createPayloadOf,
   customValueOf,
   coerce,
   cubeApiPath,
@@ -580,5 +581,50 @@ describe("pageWindow", () => {
   it("has one page for an empty cube and none at all without a total", () => {
     assert.deepEqual(pageWindow(0, 25, 0), { currentPage: 1, lastPage: 1 })
     assert.deepEqual(pageWindow(50, 25, undefined), { currentPage: 3, lastPage: undefined })
+  })
+})
+
+describe("the create payload", () => {
+  const orgFields = [
+    field({ name: "name", label: "Name", required: true }),
+    field({ name: "externalId", label: "External ID", nullable: true }),
+    field({ name: "industry", label: "Industry", nullable: true }),
+    field({ name: "employees", label: "Employees", type: "integer", nullable: true }),
+  ]
+
+  it("carries only the filled fields, coerced like an inline edit", () => {
+    const { payload, missing } = createPayloadOf(orgFields, {
+      name: "  Acme  ",
+      industry: "Software",
+      employees: "42",
+    })
+    // Untouched fields are absent, so the create schema's defaults apply;
+    // values are trimmed, numbers become numbers, required non-nullable
+    // strings travel as the trimmed text.
+    assert.deepEqual(payload, { name: "Acme", industry: "Software", employees: 42 })
+    assert.deepEqual(missing, [])
+  })
+
+  it("reports a required field left empty by its label, and sends nothing", () => {
+    const { payload, missing } = createPayloadOf(orgFields, {
+      name: "   ",
+      industry: "Software",
+    })
+    assert.deepEqual(payload, { industry: "Software" })
+    assert.deepEqual(missing, ["Name"])
+  })
+
+  it("skips whitespace-only optional fields instead of storing empty strings", () => {
+    const { payload } = createPayloadOf(orgFields, {
+      name: "Acme",
+      externalId: " ",
+    })
+    assert.deepEqual(payload, { name: "Acme" })
+  })
+
+  it("treats a missing key as an untouched field", () => {
+    const { payload, missing } = createPayloadOf(orgFields, {})
+    assert.deepEqual(payload, {})
+    assert.deepEqual(missing, ["Name"])
   })
 })
