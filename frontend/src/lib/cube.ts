@@ -364,7 +364,9 @@ export function coerce(field: FieldMetadata, value: string): unknown {
 // trim) are skipped, so the payload carries only what was filled and the
 // create schema's defaults apply to the rest; a required field left empty is
 // reported by its label, so the form can refuse the submit with qwbe's own
-// field names instead of a 400 round trip.
+// field names instead of a 400 round trip. A boolean is the exception: an
+// untouched checkbox IS a value (false), not an absence -- a required boolean
+// (the sandbox's TVA flag) must reach qwbe as false, not as a refusal.
 export function createPayloadOf(
   fields: FieldMetadata[],
   values: Record<string, string>,
@@ -373,7 +375,7 @@ export function createPayloadOf(
   const missing: string[] = []
   for (const field of fields) {
     const value = (values[field.name] ?? "").trim()
-    if (value === "") {
+    if (value === "" && field.type !== "boolean") {
       if (field.required) missing.push(field.label)
     } else {
       payload[field.name] = coerce(field, value)

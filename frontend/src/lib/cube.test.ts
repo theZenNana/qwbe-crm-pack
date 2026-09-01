@@ -627,4 +627,27 @@ describe("the create payload", () => {
     assert.deepEqual(payload, {})
     assert.deepEqual(missing, ["Name"])
   })
+
+  // The sandbox's required custom flags (form/tva/cui, the vtiger mirror): a
+  // required BOOLEAN must reach qwbe as false when untouched -- an unchecked
+  // box is a value, not an absence -- while a required enum still refuses.
+  const vatFields = [
+    field({ name: "name", label: "Name", required: true }),
+    field({ name: "tva", label: "TVA", type: "boolean", nullable: false, required: true }),
+    field({ name: "form", label: "Form", nullable: false, enum: ["SRL", "SA"], required: true }),
+  ]
+
+  it("sends an untouched required boolean as false, never as a refusal", () => {
+    const untouched = createPayloadOf(vatFields, { name: "Acme" })
+    assert.deepEqual(untouched.payload, { name: "Acme", tva: false })
+    assert.deepEqual(untouched.missing, ["Form"])
+    const toggledOff = createPayloadOf(vatFields, { name: "Acme", tva: "false" })
+    assert.deepEqual(toggledOff.payload, { name: "Acme", tva: false })
+    assert.deepEqual(toggledOff.missing, ["Form"])
+  })
+
+  it("reports a required enum left unchosen by its label", () => {
+    const { missing } = createPayloadOf(vatFields, { name: "Acme", tva: "true" })
+    assert.deepEqual(missing, ["Form"])
+  })
 })

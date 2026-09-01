@@ -1,11 +1,20 @@
 "use client"
 
 // The create form, driven by the same cube metadata as the list and detail
-// (QWB-49). The caller names the fields to show -- the cube's basic set, not
-// every editable field (QWB-54, F1) -- while labels, required flags,
+// (QWB-49). The caller names the static fields to show -- the cube's basic
+// set, not every editable field (QWB-54, F1) -- while labels, required flags,
 // nullability and the relation picker come from the published metadata: no
 // field label is hard-coded here, and a name the schema does not define (or
 // does not accept on create) is dropped.
+//
+// Required CUSTOM fields are appended automatically, derived from the same
+// metadata: on a stack whose custom-field definitions carry required flags
+// (the vtiger mirror: form/tva/cui on organizations) the kernel refuses every
+// create without them, so a basic form without them could not create a row at
+// all. No management surface here -- attaching, defaults and hiding are the
+// settings area's job (F2). The control per field follows the metadata alone
+// (renderKindOf, the same classifier the inline editor uses): an enum is a
+// select, a boolean a checkbox, everything else a text input.
 //
 // Submit POSTs the filled fields through the server proxy (the token stays in
 // the cookie) and lands on the new row's detail page; qwbe's own refusal
@@ -23,6 +32,7 @@ import {
   errorBody,
   errorMessage,
   metadataApiPath,
+  renderKindOf,
   rowHref,
   routeOf,
   type CubeMetadata,
@@ -31,8 +41,16 @@ import {
 import { RelationTypeahead } from "@/components/relation-typeahead"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 
 export function CubeCreateForm({
@@ -40,7 +58,7 @@ export function CubeCreateForm({
   fields,
 }: {
   cube: string
-  // The field names to show, in display order.
+  // The static field names to show, in display order.
   fields: string[]
 }) {
   const router = useRouter()
@@ -76,18 +94,19 @@ export function CubeCreateForm({
     }
   }, [cube])
 
-  // The caller's order decides the display order; only fields the schema
-  // actually accepts on create are rendered.
-  const formFields = useMemo(
-    () =>
-      meta
-        ? fields.flatMap((name) => {
-            const field = meta.fields.find((f) => f.name === name && f.editable)
-            return field ? [field] : []
-          })
-        : [],
-    [meta, fields],
-  )
+  // The caller's order decides the display order of the static fields; only
+  // fields the schema actually accepts on create are rendered. The required
+  // custom fields follow (metadata order): the kernel refuses a create that
+  // lacks them, so they are part of the create contract, not decoration.
+  const formFields = useMemo(() => {
+    if (!meta) return []
+    const statics = fields.flatMap((name) => {
+      const field = meta.fields.find((f) => f.name === name && f.editable)
+      return field ? [field] : []
+    })
+    const requiredCustoms = meta.fields.filter((f) => f.custom && f.required)
+    return [...statics, ...requiredCustoms]
+  }, [meta, fields])
 
   const setValue = (name: string, value: string) =>
     setValues((v) => ({ ...v, [name]: value }))
@@ -101,6 +120,8 @@ export function CubeCreateForm({
     }
     setRefusal(null)
     setPending(true)
+    // Custom values ride at the top level; the kernel folds the declared keys
+    // into the row's `custom` sub-object (the same fold the inline PATCH uses).
     const response = await apiFetch(cubeApiPath(cube), {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -140,13 +161,46 @@ export function CubeCreateForm({
                     value={values[f.name] ?? ""}
                     onChange={(id) => setValue(f.name, id)}
                   />
+                ) : renderKindOf(f) === "select" ? (
+                  <>
+                    <FieldLabel>{f.label}</FieldLabel>
+                    {/* Radix forbids an empty-string SelectItem value, so an
+                        untouched select simply shows no choice; a required
+                        enum is caught client-side on submit. The optional-enum
+                        clear item (the editor's "__clear__" sentinel) has no
+                        occurrence yet: every enum that reaches this form is
+                        required by construction. */}
+                    <Select value={values[f.name] ?? ""} onValueChange={(v) => setValue(f.name, v)}>
+                      <SelectTrigger className="w-64" aria-label={f.label}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {f.enum!.map((v) => (
+                          <SelectItem key={v} value={v}>
+                            {v}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </>
+                ) : renderKindOf(f) === "checkbox" ? (
+                  <div className="flex items-center gap-2">
+                    <Checkbox
+                      id={`create-${f.name}`}
+                      aria-label={f.label}
+                      checked={values[f.name] === "true"}
+                      onCheckedChange={(checked) => setValue(f.name, checked ? "true" : "false")}
+                    />
+                    <FieldLabel htmlFor={`create-${f.name}`}>{f.label}</FieldLabel>
+                  </div>
                 ) : (
                   <>
                     <FieldLabel htmlFor={`create-${f.name}`}>{f.label}</FieldLabel>
-                    {/* ponytail: every form field so far is free text (the two
-                        cubes' basic sets); if a create set ever gains an enum
-                        or number field, renderKindOf/coerce in lib/cube.ts are
-                        the classifiers to drive a Select/checkbox from. */}
+                    {/* ponytail: every text form field so far is free text
+                        (the two cubes' basic sets and the custom strings); if
+                        a create set ever gains a number field, coerce in
+                        lib/cube.ts already handles the value -- only a
+                        type="number" input would be added here. */}
                     <Input
                       id={`create-${f.name}`}
                       value={values[f.name] ?? ""}
