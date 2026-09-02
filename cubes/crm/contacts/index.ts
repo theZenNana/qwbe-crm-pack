@@ -75,6 +75,15 @@ const summary = (c: ContactRow): SummaryRow => ({
   ],
 })
 
+// The one declaration per route (QWB-54, 14c): what the manifest publishes, the mount
+// wrapper enforces before the handler runs — the same strings the handlers below require.
+// `list` is not declared: the kernel's read convention (`crm/contacts:read`) applies to it.
+const ROUTES = {
+  get: "crm/contacts:read",
+  create: "crm/contacts:write",
+  update: "crm/contacts:write",
+} as const
+
 // Named, because the kernel's generic list handler reads its `searchable` (and the declared
 // relations) to build the query it serves (QWB-54, ticket 07): the manifest is the whole
 // answer, so the handler must see it.
@@ -107,6 +116,7 @@ const manifest = {
     { name: "crm/contacts:read", roles: ["admin", "reader"] },
     { name: "crm/contacts:write", roles: ["admin"] },
   ],
+  routes: ROUTES,
   publishes: ["crm/contacts.created"],
   dataMigration: [{ fromCube: "contacts", toCube: "crm/contacts", fromPlugin: "crm-pack" }],
 }

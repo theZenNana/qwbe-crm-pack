@@ -14,6 +14,10 @@ const group = HttpApiGroup.make("crm")
   .add(HttpApiEndpoint.get("children")`/crm`.addSuccess(Schema.Array(ChildInfo)).addError(Forbidden))
   .middleware(Authorization)
 
+// The one declaration per route (QWB-54, 14c): what the manifest publishes, the mount
+// wrapper enforces before the handler runs — the same string the handler below requires.
+const ROUTES = { children: "crm:read" } as const
+
 export const cube = defineCube(group, {
   manifest: {
     name: "crm",
@@ -21,6 +25,7 @@ export const cube = defineCube(group, {
     screen: true,
     requiresAuth: true,
     permissions: [{ name: "crm:read", roles: ["admin", "reader"] }],
+    routes: ROUTES,
   },
 
   create: ({ catalogue }: CubeTools) => ({
