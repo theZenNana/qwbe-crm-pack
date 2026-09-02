@@ -1,3 +1,4 @@
+// @ts-check
 // One command runs everything (QWB-51): npm run e2e
 //
 // 1. Copies the merged qwbe platform from its repository WITHOUT touching the repository
@@ -39,7 +40,7 @@ const freePort = async () => {
       const srv = createServer()
       srv.on("error", () => resolve(0))
       srv.listen(0, "127.0.0.1", () => {
-        const { port } = srv.address()
+        const { port } = /** @type {import("node:net").AddressInfo} */ (srv.address())
         srv.close(() => resolve(port))
       })
     })
@@ -97,7 +98,38 @@ if (process.platform !== "linux") fail("this suite drives the Orca desktop app a
 rmSync(CONFIG.workDir, { recursive: true, force: true })
 rmSync(CONFIG.dataDir, { recursive: true, force: true })
 mkdirSync(CONFIG.workDir, { recursive: true })
-execSync(`git -C ${CONFIG.qwbeRepo} archive origin/main | tar -x -C ${CONFIG.workDir}`)
+// WHICH kernel this run is built from.
+//
+// This line said `origin/main`, hardcoded, so every run of this suite tested the
+// merged kernel and never the branch being written -- the generic list handler
+// the filter scenarios walk was on the branch, and no scenario ever reached it.
+// A suite that silently tests something other than what you changed is worse
+// than no suite. HEAD of whatever the kernel repository has checked out is what
+// "run the suite" means; QWBE_E2E_KERNEL_REF pins another ref for the case where
+// a release check really does want origin/main.
+//
+// `git archive` carries COMMITTED content only, by design: this stays a copy
+// addressable by a hash, not a copy of someone's desk. An uncommitted kernel
+// change is therefore NOT in the run -- which is exactly the "I fixed it and the
+// suite still fails" trap, so a dirty tree is printed as a warning instead of
+// being swallowed.
+const gitIn = (dir, args) => execSync(`git -C ${dir} ${args}`, { encoding: "utf8" }).trim()
+const dirtyCount = (dir) => gitIn(dir, "status --porcelain").split("\n").filter(Boolean).length
+const kernelRef = process.env.QWBE_E2E_KERNEL_REF ?? "HEAD"
+let kernelSha = ""
+let kernelName = ""
+try {
+  kernelSha = gitIn(CONFIG.qwbeRepo, `rev-parse --short ${kernelRef}`)
+  kernelName = gitIn(CONFIG.qwbeRepo, `rev-parse --abbrev-ref ${kernelRef}`)
+} catch {
+  fail(`QWBE_E2E_KERNEL_REF=${kernelRef} does not resolve in ${CONFIG.qwbeRepo}`)
+}
+log(`== kernel: ${kernelRef} -> ${kernelName} ${kernelSha} (${CONFIG.qwbeRepo}) ==`)
+const kernelDirty = dirtyCount(CONFIG.qwbeRepo)
+if (kernelDirty !== 0) {
+  log(`   WARNING: ${kernelDirty} uncommitted change(s) in the kernel tree are NOT in this run (git archive takes committed content only)`)
+}
+execSync(`git -C ${CONFIG.qwbeRepo} archive ${kernelRef} | tar -x -C ${CONFIG.workDir}`)
 // Install the crm-pack cubes the way probes/crm.mjs does: copy the plugin under
 // core/plugins/crm-pack. The plugin's node_modules contains a relative qwbe-core symlink
 // that pointed at the source checkout; repoint it at THIS copy.
@@ -135,12 +167,52 @@ for (const packDir of ["crm-pack", "customfields-pack"]) {
 // records nothing, and the per-machine records in QWBE_DATA_DIR still catch
 // drift between runs. The staleness itself is reported, not hidden (QWB-52
 // review 19: the path must exist, not merely be named).
+// The two packs above came from their WORKING TREES (cpSync), not from a git ref:
+// they are the code under test, uncommitted edits included. So a run is a third
+// thing -- a committed kernel plus whatever the pack directories hold right now
+// -- and the log says so, instead of letting the kernel's hash imply that both
+// sides are pinned.
+const packState = (dir) => {
+  try {
+    const n = dirtyCount(dir)
+    const head = gitIn(dir, "rev-parse --short HEAD")
+    return n === 0 ? head : `${head} +${n} uncommitted`
+  } catch {
+    return "not a git checkout"
+  }
+}
+const packLine =
+  "packs from the working tree (uncommitted edits INCLUDED): " +
+  `crm-pack ${packState(CONFIG.crmPack)}, customfields-pack ${packState(CONFIG.customFieldsPack)}`
+log(`== ${packLine} ==`)
+// The written ledger carries the same line: a saved result cannot claim a
+// revision it did not run.
+const revisionLine =
+  `Kernel: ${kernelRef} -> ${kernelName} ${kernelSha}` +
+  (kernelDirty === 0 ? "" : ` (${kernelDirty} uncommitted kernel change(s) NOT included)`) +
+  `. ${packLine.charAt(0).toUpperCase()}${packLine.slice(1)}.`
 writeFileSync(join(CONFIG.workDir, "empty-cube-versions.json"), "{}\n")
 log("== install dependencies (qwbe core) ==")
 // npm run propagates npm_config_* (including the global allow-scripts policy) into this
 // process; a project-scoped install rejects the flag, so strip it for the copy's install.
 const npmEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("npm_config_")))
-execSync("npm ci --no-audit --no-fund --loglevel=error", { cwd: join(CONFIG.workDir, "core"), stdio: "inherit", env: npmEnv })
+execSync("npm ci --no-audit --no-fund --loglevel=error", { cwd: join(CONFIG.workDir, "core"), stdio: "inherit", env: /** @type {NodeJS.ProcessEnv} */ (npmEnv) })
+
+// A database of this run's own, never the developer's.
+//
+// Sharing the dev database is not only about stray rows: qwbe's logout drops
+// EVERY session of the account it is called for ("logout means everywhere",
+// core/src/cubes/auth/index.ts), and the session table lives in that database.
+// The logout scenario therefore signed the owner out of his own stack, from a
+// throwaway kernel on another port (measured 2026-08-31). The kernel already
+// ships the helper this needs, so the suite gets a fresh database and drops it
+// again at teardown. QWBE_DATABASE_URL still overrides, for a run that must
+// point somewhere specific.
+const { createTestDatabase } = await import(join(CONFIG.workDir, "core", "src", "pg", "test-db.ts"))
+const db = process.env.QWBE_DATABASE_URL
+  ? { url: process.env.QWBE_DATABASE_URL, drop: async () => {} }
+  : await createTestDatabase("e2e")
+log(`== database for this run: ${db.url.replace(/:[^:@/]*@/, ":***@")} ==`)
 
 const qwbePort = CONFIG.qwbePort || (await freePort())
 const fePort = CONFIG.frontendPort || (await freePort())
@@ -155,8 +227,8 @@ pids.push(
   nohup(
     `env QWBE_PORT=${qwbePort} QWBE_DATA_DIR=${CONFIG.dataDir} QWBE_ADMIN_PASSWORD=${CONFIG.password} ` +
       // The merged platform stores every cube in one Postgres database
-      // (QWB-44/45); the dev database on :5433 is the default, overridable.
-      `QWBE_DATABASE_URL=${process.env.QWBE_DATABASE_URL ?? "postgres://postgres:qwbe@localhost:5433/qwbe"} ` +
+      // (QWB-44/45); this run has its own, created above.
+      `QWBE_DATABASE_URL=${db.url} ` +
       // The committed cube-versions baseline inside the qwbe checkout is
       // currently stale against its own merged main (the account cube's
       // recorded hash no longer matches what main derives). That baseline is
@@ -164,6 +236,12 @@ pids.push(
       // and let the per-machine records in QWBE_DATA_DIR still catch drift
       // between runs. The staleness itself is reported, not hidden.
       `QWBE_CUBE_VERSIONS_BASELINE=${join(CONFIG.workDir, "empty-cube-versions.json")} ` +
+      // The scratch data dir is deleted on every run, so the migration ownership
+      // registry is empty at boot: the kernel refuses any declared dataMigration
+      // without a pre-ledger authorization (kernel ticket 08). The three legacy
+      // sources this pack declares are authorized here, exactly as the throwaway
+      // bench in tools/import.test.mjs does.
+      `QWBE_LEGACY_MIGRATIONS=contacts:crm-pack,contracts:crm-pack,crm/accounts:crm-pack ` +
       `QWBE_READER_PASSWORD=reader QWBE_MOUNTED=${CONFIG.mounted} ` +
       `QWBE_ALLOWED_ORIGINS=http://localhost:${fePort} node src/main.ts`,
     qwbeLog,
@@ -253,9 +331,11 @@ try {
   if (api) await seedDown(api).catch((e) => console.error(`teardown: seed deletion failed: ${e.message}`))
   else console.log("teardown: nothing seeded (no session); the scratch data dir is deleted with the work directory")
   killStack()
+  await db.drop().catch((e) => console.error(`teardown: dropping the run database failed: ${e.message}`))
   rmSync(CONFIG.workDir, { recursive: true, force: true })
 
   const results = writeResults([
+    revisionLine,
     `Stack: qwbe :${qwbePort}, frontend :${fePort} (both proven up before the browser steps).`,
     loginError ? `Login through the qwbe API failed: ${loginError}` : "",
     scenarioError ? `Runner error after scenarios started: ${scenarioError.message}` : "",

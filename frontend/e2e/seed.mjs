@@ -1,5 +1,6 @@
+// @ts-check
 // The e2e seed (QWB-51): two organizations with distinguishable names, two contacts, one of
-// them pointing at the first organization through `accountId`.
+// them pointing at the first organization through `organizationId`.
 //
 // Idempotent: a second run finds its own rows by the seeded names and reuses them, so the
 // same rows exist after any number of runs. Teardown (`seedDown`) deletes EXACTLY the rows
@@ -31,16 +32,16 @@ const findByName = async (api, cube, name) => {
 
 /** Create whatever is missing; return { orgA, orgB, contactLinked, contactFree }. */
 export async function seedUp(api, log = console.log) {
-  let orgA = await findByName(api, "accounts", ORG_A)
+  let orgA = await findByName(api, "organizations", ORG_A)
   if (!orgA) {
-    const r = await api.call("/accounts", { method: "POST", body: { name: ORG_A, billingCity: CITY_BASELINE, industry: "manufacturing", employees: 42 } })
+    const r = await api.call("/organizations", { method: "POST", body: { name: ORG_A, billingCity: CITY_BASELINE, industry: "manufacturing", employees: 42 } })
     if (r.status !== 200) throw new Error(`seed: create ${ORG_A} failed http ${r.status}: ${JSON.stringify(r.body).slice(0, 200)}`)
     orgA = r.body
     log(`seed: created organization ${ORG_A} (${orgA.id})`)
   }
-  let orgB = await findByName(api, "accounts", ORG_B)
+  let orgB = await findByName(api, "organizations", ORG_B)
   if (!orgB) {
-    const r = await api.call("/accounts", { method: "POST", body: { name: ORG_B, billingCity: "E2E City Beta", industry: "logistics", employees: 7 } })
+    const r = await api.call("/organizations", { method: "POST", body: { name: ORG_B, billingCity: "E2E City Beta", industry: "logistics", employees: 7 } })
     if (r.status !== 200) throw new Error(`seed: create ${ORG_B} failed http ${r.status}: ${JSON.stringify(r.body).slice(0, 200)}`)
     orgB = r.body
     log(`seed: created organization ${ORG_B} (${orgB.id})`)
@@ -48,12 +49,12 @@ export async function seedUp(api, log = console.log) {
   // The linked contact must point at orgA; an idempotent re-run also repairs a stale link.
   let contactLinked = await findByName(api, "contacts", CONTACT_LINKED)
   if (!contactLinked) {
-    const r = await api.call("/contacts", { method: "POST", body: { name: CONTACT_LINKED, email: "e2e-dana@example.com", accountId: orgA.id } })
+    const r = await api.call("/contacts", { method: "POST", body: { name: CONTACT_LINKED, email: "e2e-dana@example.com", organizationId: orgA.id } })
     if (r.status !== 200) throw new Error(`seed: create contact failed http ${r.status}: ${JSON.stringify(r.body).slice(0, 200)}`)
     contactLinked = r.body
     log(`seed: created contact ${CONTACT_LINKED} (${contactLinked.id})`)
-  } else if (contactLinked.accountId !== orgA.id) {
-    const r = await api.call(`/contacts/${contactLinked.id}`, { method: "PATCH", body: { accountId: orgA.id } })
+  } else if (contactLinked.organizationId !== orgA.id) {
+    const r = await api.call(`/contacts/${contactLinked.id}`, { method: "PATCH", body: { organizationId: orgA.id } })
     if (r.status !== 200) throw new Error(`seed: relink contact failed http ${r.status}`)
     log("seed: relinked contact to the first organization")
   }
@@ -78,8 +79,8 @@ export async function seedDown(api) {
   for (const [cube, name] of [
     ["contacts", CONTACT_LINKED],
     ["contacts", CONTACT_FREE],
-    ["accounts", ORG_A],
-    ["accounts", ORG_B],
+    ["organizations", ORG_A],
+    ["organizations", ORG_B],
   ]) {
     const row = await findByName(api, cube, name)
     if (row) {

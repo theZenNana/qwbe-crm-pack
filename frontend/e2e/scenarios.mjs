@@ -1,8 +1,10 @@
-// The six end-to-end scenarios (QWB-51), driven through the Orca browser.
+// @ts-check
+// The end-to-end scenarios (QWB-51), driven through the Orca browser.
 //
 // Every scenario records one PASS / RED / SKIP line and at least one screenshot into the
-// dated results directory. Nothing here talks to qwbe directly except the metadata lookup
-// for the non-editable-field scenario; everything else goes through the real UI.
+// dated results directory. Nothing here talks to qwbe directly except the metadata lookups
+// and the API read-backs; everything else goes through the real UI. The scenario numbers
+// are authoring order, not run order (10 runs between 06 and 08).
 
 import {
   setPage,
@@ -52,7 +54,7 @@ export function closeStaleTabs() {
     const list = orca("tab", "list")
     for (const t of list.tabs ?? []) {
       const url = String(t.url ?? "")
-      if (/^http:\/\/localhost:\d+\/(login|accounts|contacts|me)/.test(url) && !tabs.includes(t.browserPageId)) {
+      if (/^http:\/\/localhost:\d+\/(login|organizations|contacts|me)/.test(url) && !tabs.includes(t.browserPageId)) {
         orca("tab", "close", "--page", t.browserPageId)
       }
     }
@@ -170,28 +172,52 @@ const pause = async (ms = 800) => {
 }
 
 /**
- * Open a Radix Select through the browser only, retrying until an option shows.
+ * Leave a Radix Select open with its options readable in the snapshot.
  *
- * A CDP click on the radix Select trigger does not open it (the trigger wants
- * a keydown, and the OS-level path is dead on a locked desktop), so: focus the
- * trigger and dispatch a synthetic Enter keydown -- the same event radix
- * handles -- then re-snapshot. Refs go stale across re-renders, so the caller
- * must take a FRESH snapshot and click the option ref from it.
+ * Two ways in, and they fight each other -- which is what made the caller's
+ * assertion land about one run in two (measured 2026-08-31 on the live stack,
+ * replaying only this sequence):
+ *
+ * - the CDP click the caller already made DOES open the select: right after
+ *   it, `aria-expanded` is "true", the five options are in the DOM and focus
+ *   sits inside the listbox;
+ * - `orca focus` on the trigger then pulls focus back OUT of that listbox,
+ *   and radix closes on it. The close is asynchronous: the check that follows
+ *   can still read an open list while the close is already on its way, so the
+ *   caller's next snapshot finds no options at all. Measured, one attempt:
+ *     before: expanded=true,  domOptions=[text,number,date,bool,select]
+ *     after:  expanded=false, domOptions=[], active=cf-type/combobox
+ *
+ * So the keyboard open is only for a select that is really CLOSED, and
+ * "really" is read from the DOM: the accessibility snapshot lags a render
+ * behind and deciding on it is how the toggle got started. When the list is
+ * open, wait for the options to reach the snapshot -- that is what the caller
+ * reads -- and touch nothing.
  */
 async function openSelect(ref) {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    orca("focus", "--element", ref, ...pageArgs())
+  const listOpen = () =>
     orca(
       "eval",
       "--expression",
-      "(() => { const el = document.activeElement; if (!el || el.getAttribute('role') !== 'combobox') return 'no-combobox'; el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); return 'opened' })()",
+      "(() => String(document.querySelector('[role=option]') !== null))()",
       ...pageArgs(),
-    )
-    await pause(800)
-    const snap = snapshot()
-    if (Object.values(snap.refs).some((v) => v.role === "option")) return true
+    )?.result === "true"
+  const deadline = Date.now() + 15_000
+  for (;;) {
+    if (listOpen()) {
+      if (Object.values(snapshot().refs).some((v) => v.role === "option")) return true
+    } else {
+      orca("focus", "--element", ref, ...pageArgs())
+      orca(
+        "eval",
+        "--expression",
+        "(() => { const el = document.activeElement; if (!el || el.getAttribute('role') !== 'combobox') return 'no-combobox'; el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); return 'opened' })()",
+        ...pageArgs(),
+      )
+    }
+    if (Date.now() >= deadline) return false
+    await new Promise((r) => setTimeout(r, 250))
   }
-  return false
 }
 
 // --- 1. login with the correct credentials lands on the identity page -----------
@@ -227,14 +253,14 @@ export async function scenarioLogin() {
 // --- 2. organization list: seeded rows, sorting, searching ----------------------
 export async function scenarioList() {
   const name = "organization list shows, sorts and searches the seeded organizations"
-  await open("/accounts")
+  await open("/organizations")
   await settle(ORG_A)
   let snap = snapshot()
-  shot("02-accounts-list")
+  shot("02-organizations-list")
   const showsBoth = snap.text.includes(ORG_A) && snap.text.includes(ORG_B)
   if (!showsBoth) {
-    shot("02-accounts-list-RED", { full: true })
-    return record(name, "RED", `list does not show both seeded orgs (${snap.origin})`, "02-accounts-list-RED.png")
+    shot("02-organizations-list-RED", { full: true })
+    return record(name, "RED", `list does not show both seeded orgs (${snap.origin})`, "02-organizations-list-RED.png")
   }
 
   // Sorting: click the Name header's sort BUTTON twice for a descending sort, then
@@ -252,7 +278,7 @@ export async function scenarioList() {
   await clickStable((v) => v.role === "button" && (v.name ?? "").startsWith("Name"))
   await waitForText("Name ↓")
   snap = snapshot()
-  shot("02-accounts-sorted-desc")
+  shot("02-organizations-sorted-desc")
   const betaFirst = snap.text.indexOf(ORG_B) >= 0 && snap.text.indexOf(ORG_B) < snap.text.indexOf(ORG_A)
   if (!betaFirst) {
     shot("02-sort-RED", { full: true })
@@ -266,22 +292,30 @@ export async function scenarioList() {
     return record(name, "RED", "Name filter input not found", "02-search-RED.png")
   }
   type(ORG_A)
-  const narrowed = await waitForText(ORG_A) && (async () => {
-    await new Promise((r) => setTimeout(r, 1500))
-    return !snapshot().text.includes(ORG_B)
-  })()
+  // Every operand is a settled value: waitForText is awaited on its own line,
+  // and the Beta check runs on one snapshot taken after the filter had time
+  // to apply. The old form `await waitForText(X) && (async () => {...})()`
+  // bound await to the LEFT operand only, so the right side was an unawaited
+  // Promise -- always truthy -- and the assertion could never fail (QWB-54).
+  const alphaShown = await waitForText(ORG_A)
+  await new Promise((r) => setTimeout(r, 1500))
+  const betaGone = !snapshot().text.includes(ORG_B)
+  const narrowed = alphaShown && betaGone
   snap = snapshot()
-  shot("02-accounts-searched")
-  return record(name, narrowed ? "PASS" : "RED", narrowed ? "sorted desc and filtered to Alpha" : "filter did not narrow the list", "02-accounts-searched.png")
+  shot("02-organizations-searched")
+  return record(name, narrowed ? "PASS" : "RED", narrowed ? "sorted desc and filtered to Alpha" : "filter did not narrow the list", "02-organizations-searched.png")
 }
 
 // --- 3. inline edit on an editable field saves without a reload -----------------
-export async function scenarioInlineEdit() {
+export async function scenarioInlineEdit(api) {
   const name = "inline edit on an editable field saves and shows without a reload"
-  await open("/accounts")
+  await open("/organizations")
   await settle(ORG_A)
   let snap = snapshot()
-  const newValue = "E2E City Edited 42"
+  // Unique per run: a previous run that crashed before teardown can leave its
+  // edited value on a row, and a constant value would let THIS run's read-back
+  // mistake that stale row for this run's save.
+  const newValue = `E2E City Edited ${Date.now()}`
   const findEditor = (refs) =>
     Object.entries(refs).find(([, v]) => v.role === "textbox" && /city/i.test(v.name ?? ""))?.[0]
   // The row for Alpha: editable cells carry buttons whose accessible name is
@@ -353,9 +387,22 @@ export async function scenarioInlineEdit() {
   snap = snapshot()
   shot("03-after-inline-edit")
   const noError = !snap.text.includes("invalid") && !snap.text.includes("failed")
-  const verdict = saved && noError ? "PASS" : "RED"
+  // Page text is not proof the save reached the backend: the open editor held
+  // the very text being waited for. Read the rows back through the API and
+  // compare the field (the form of scenarioCustomFieldTypes). The value is
+  // unique to this run, so the row that carries it can only be this run's save.
+  const rows = (await api.call("/organizations?limit=50")).body?.rows ?? []
+  const savedRow = rows.find((r) => r.billingCity === newValue)
+  const verdict = saved && noError && Boolean(savedRow) ? "PASS" : "RED"
   const note = firstClickOpened ? "" : " (first click produced no editor; one freshly resolved retry)"
-  return record(name, verdict, verdict === "PASS" ? `${newValue} visible after Enter${note}` : "new value did not appear", "03-after-inline-edit.png")
+  return record(
+    name,
+    verdict,
+    verdict === "PASS"
+      ? `${newValue} visible after Enter and billingCity read back through the API${note}`
+      : `new value missing on the page or in the backend row (api rows: ${rows.length}, page=${Boolean(saved)}, noError=${noError})`,
+    "03-after-inline-edit.png",
+  )
 }
 
 // --- 4. inline edit on a NON-editable field is refused --------------------------
@@ -367,19 +414,19 @@ export async function scenarioNonEditable(api) {
   const name = "inline edit on a field the metadata marks not editable is refused"
   // The cube name is a single path parameter for qwbe, so it must be encoded;
   // unencoded it is two path segments and qwbe answers 404.
-  const meta = await api.call(`/catalog/${encodeURIComponent("crm/accounts")}/metadata`)
+  const meta = await api.call(`/catalog/${encodeURIComponent("crm/organizations")}/metadata`)
   const fields = meta.body?.fields ?? []
   const nonEditable = fields.find((f) => !f.editable && f.name !== "id" && f.name !== "type") ?? fields.find((f) => !f.editable)
   if (!nonEditable) {
     shot("04-noneditable-RED", { full: true })
     return record(name, "RED", "metadata exposes no non-editable column at all", "04-noneditable-RED.png")
   }
-  const row = (await api.call("/accounts?limit=1")).body?.rows?.[0]
+  const row = (await api.call("/organizations?limit=1")).body?.rows?.[0]
   if (!row) {
     shot("04-noneditable-RED", { full: true })
     return record(name, "RED", "no organization row available to open", "04-noneditable-RED.png")
   }
-  await open(`/accounts/${row.id}`)
+  await open(`/organizations/${row.id}`)
   const value = row[nonEditable.name]
   await settle(nonEditable.label)
   let snap = snapshot()
@@ -407,10 +454,10 @@ export async function scenarioNonEditable(api) {
 // --- 5. organization -> contact -> back to the organization ---------------------
 export async function scenarioNavigation(seed) {
   const name = "navigation organization to contact and back"
-  await open(`/accounts/${seed.orgA.id}`)
+  await open(`/organizations/${seed.orgA.id}`)
   await settle(CONTACT_LINKED)
   let snap = snapshot()
-  shot("05-account-detail")
+  shot("05-organization-detail")
   const contactLink = await clickStable((v) => v.name === CONTACT_LINKED && v.role !== "heading")
   if (!contactLink) {
     shot("05-nav-RED", { full: true })
@@ -428,10 +475,10 @@ export async function scenarioNavigation(seed) {
     shot("05-nav-RED", { full: true })
     return record(name, "RED", "contact detail does not link back to the organization", "05-nav-RED.png")
   }
-  const back = await waitForUrl(new RegExp(`.*/accounts/${seed.orgA.id}.*`))
+  const back = await waitForUrl(new RegExp(`.*/organizations/${seed.orgA.id}.*`))
   snap = snapshot()
-  shot("05-back-on-account")
-  return record(name, back ? "PASS" : "RED", back ? "round trip organization -> contact -> organization" : "did not land back on the organization", "05-back-on-account.png")
+  shot("05-back-on-organization")
+  return record(name, back ? "PASS" : "RED", back ? "round trip organization -> contact -> organization" : "did not land back on the organization", "05-back-on-organization.png")
 }
 
 // --- 6. logout returns to the login page and /me is no longer reachable ---------
@@ -459,35 +506,105 @@ export async function scenarioLogout() {
   snap = snapshot()
   shot("06-me-after-logout")
   shot("06-final", { full: true })
-  const pass = bounced && snapshot().origin.endsWith("/login") && !snap.text.includes("Signed in as")
+  // The bounce now carries the destination (/login?next=%2Fme), so compare the
+  // PATH, not the whole URL: endsWith("/login") would call a correct redirect
+  // a failure (QWB-54).
+  const onLogin = new URL(snapshot().origin).pathname === "/login"
+  const pass = bounced && onLogin && !snap.text.includes("Signed in as")
   return record(name, pass ? "PASS" : "RED", pass ? "/me redirects to /login after logout" : "/me still reachable", "06-final.png")
 }
 
+// --- 10. create an organization through the F1 form ------------------------------
+// (Numbered 10 at authoring time; it runs between 05 and 07 in runAll.) The
+// create form is the F1 surface: the page names the basic field set, the
+// metadata supplies labels and required flags, the submit goes through the
+// server proxy and lands on the new row's detail page. externalId must NOT be
+// offered (review 14b round 2, finding 7): it carries the import identity, and
+// its unique partial index turns a hand-typed duplicate into a 500, not a
+// refusal.
+export async function scenarioCreateOrganization(api) {
+  const name = "create organization through the form lands on its detail page"
+  const orgName = `E2E Created Org ${Date.now()}`
+  await open("/organizations/new")
+  await settle("New organization")
+  let snap = snapshot()
+  shot("10-create-form")
+  const externalOffered = Object.values(snap.refs).some((v) => (v.name ?? "") === "External Id")
+  const nameBox = await clickStable((v) => v.role === "textbox" && v.name === "Name", "Name")
+  if (!nameBox || externalOffered) {
+    shot("10-create-RED", { full: true })
+    return record(
+      name,
+      "RED",
+      externalOffered ? "the form offers externalId (finding 7)" : "no Name input on the create form",
+      "10-create-RED.png",
+    )
+  }
+  type(orgName)
+  const industryBox = await clickStable((v) => v.role === "textbox" && v.name === "Industry", "Industry")
+  if (industryBox) type("e2e manufacturing")
+  const submit = await clickStable((v) => v.role === "button" && v.name === "Create", "Create")
+  if (!submit) {
+    shot("10-create-RED", { full: true })
+    return record(name, "RED", "no Create button on the form", "10-create-RED.png")
+  }
+  // The detail route is /organizations/<id>; /organizations/new must NOT match.
+  const landed = await waitForUrl("organizations/(?!new)", 20_000)
+  snap = snapshot()
+  shot("10-after-create")
+  // Page text is not proof the create reached qwbe: read the row back.
+  const row = (await api.call("/organizations?limit=50")).body?.rows?.find((r) => r.name === orgName)
+  const pass = landed && snap.text.includes(orgName) && Boolean(row)
+  return record(
+    name,
+    pass ? "PASS" : "RED",
+    pass
+      ? `form submitted, detail page shows the name, row read back through the API (${row?.id})`
+      : `landed=${landed}, name shown=${snap.text.includes(orgName)}, backend row=${Boolean(row)}`,
+    "10-after-create.png",
+  )
+}
 
-// --- 7. a custom field defined in the UI, used, and deleted (QWB-52) -------------
+// --- 7. a custom field defined in Settings, used on the list, deleted (QWB-52, F2) ---
+// F2 moved the definitions panel off the lists and onto /settings: the panel is
+// always rendered there (no button opens it) and the Entity selector picks the
+// cube its definitions target. Define and delete happen on /settings; the value
+// is set inline on the contacts list like any other cell.
 const CF_NAME = "e2eChannel"
 const CF_LABEL = "E2E Channel"
 const CF_OPTIONS = "email, phone, event"
 
-export async function scenarioCustomField(api) {
-  const name = "custom field defined in the UI appears, is set inline, and disappears on delete"
-  await dropDefinitions(api, "crm/contacts", [CF_NAME])
-  await open("/contacts")
-  await settle(CONTACT_LINKED)
-  let snap = snapshot()
+/**
+ * Point the Settings panel at one entity. The selector is component state, so
+ * EVERY return to /settings must choose again; without it the panel shows the
+ * previously selected cube's definitions.
+ */
+async function chooseEntity(label) {
+  const combo = await clickStable((v) => v.role === "combobox" && v.name === "Entity", "Entity")
+  if (!combo) return false
+  if (!(await openSelect(combo))) return false
+  const option = Object.entries(snapshot().refs).find(([, v]) => v.role === "option" && v.name === label)?.[0]
+  if (!option) return false
+  click(option, snapshot().refs[option]?.name)
+  await pause()
+  return true
+}
 
-  // 1. open the definitions panel
-  const panelBtn = await clickStable((v) => v.role === "button" && v.name === "Custom fields", "Custom fields")
-  if (!panelBtn) {
+export async function scenarioCustomField(api) {
+  const name = "custom field defined in Settings appears, is set inline, and disappears on delete"
+  await dropDefinitions(api, "crm/contacts", [CF_NAME])
+
+  // 1. open Settings; the panel is on the page, addressed at the contacts cube
+  await open("/settings")
+  if (!(await waitForText("Fields defined at runtime", 15_000))) {
     shot("07-panel-RED", { full: true })
-    return record(name, "RED", "no Custom fields button on the contacts list", "07-panel-RED.png")
+    return record(name, "RED", "the definitions panel is not on the settings page", "07-panel-RED.png")
   }
-  const panelOpen = await waitForText("Fields defined at runtime", 15_000)
-  snap = snapshot()
-  if (!panelOpen) {
-    shot("07-panel-RED", { full: true })
-    return record(name, "RED", "definitions panel did not open", "07-panel-RED.png")
+  if (!(await chooseEntity("Contacts"))) {
+    shot("07-entity-RED", { full: true })
+    return record(name, "RED", "the Entity selector did not switch to Contacts", "07-entity-RED.png")
   }
+  let snap = snapshot()
   shot("07-panel-open")
 
   // 2. define a select field
@@ -530,19 +647,26 @@ export async function scenarioCustomField(api) {
     shot("07-define-RED", { full: true })
     return record(name, "RED", "Add field button not found", "07-define-RED.png")
   }
-  // The definition appears in the panel list AND the column appears in the
-  // table (the metadata is re-read after the definition change).
-  const columnShown = await waitForText(CF_LABEL, 15_000)
+  // The definition appears in the panel's table (the panel re-reads after the
+  // change), and the column appears on the contacts list from the list's own
+  // metadata read.
+  const definedShown = await waitForText(CF_LABEL, 15_000)
   snap = snapshot()
-  shot("07-column-appears")
-  if (!columnShown) {
+  shot("07-definition-appears")
+  if (!definedShown) {
     shot("07-column-RED", { full: true })
-    return record(name, "RED", `column ${CF_LABEL} did not appear after defining`, "07-column-RED.png")
+    return record(name, "RED", `definition ${CF_LABEL} did not appear in the panel`, "07-column-RED.png")
   }
 
-  // 3. set it inline on the seeded contact. The affordance is gated on
-  // hydration in the app, so wait for the BUTTON (never click plain text)
-  // and then click ONCE (QWB-52 review 7).
+  // 2b. set it inline on the seeded contact, on the list. The affordance is
+  // gated on hydration in the app, so wait for the BUTTON (never click plain
+  // text) and then click ONCE (QWB-52 review 7).
+  await open("/contacts")
+  await settle(CONTACT_LINKED)
+  if (!(await waitForText(CF_LABEL, 15_000))) {
+    shot("07-column-RED", { full: true })
+    return record(name, "RED", `column ${CF_LABEL} did not appear on the contacts list`, "07-column-RED.png")
+  }
   let editBtn
   editBtn = await clickStable((v) => v.role === "button" && v.name === `Edit ${CF_LABEL}`)
   if (!editBtn) {
@@ -566,42 +690,55 @@ export async function scenarioCustomField(api) {
   shot("07-inline-saved")
 
   // 4. the save must be VISIBLE in the cell, not merely "somewhere on the
-  // page": the definitions panel is still open here and its Options cell
-  // already renders "email, phone, event", so any page-text assertion on
-  // "email" passes even with the merge bug (QWB-52 review 3). Close the
-  // panel, re-snapshot, and require BOTH: the cell's edit button exists AND
-  // the options string is gone AND the bare value text is on the page.
-  if (await clickStable((v) => v.role === "button" && v.name === "Hide custom fields", "Hide custom fields")) {
-    await pause()
-  }
+  // page". The panel is not on the list anymore (F2), so the options string
+  // can only come from a stray panel render: require the cell's edit button
+  // AND the options string absent AND the bare value text on the page
+  // (QWB-52 review 3's merge-bug guard, adapted).
+  await pause()
   snap = snapshot()
   const panelClosed = !snap.text.includes(CF_OPTIONS)
   const cellBtn = Object.entries(snap.refs).find(
     ([, v]) => v.role === "button" && v.name === `Edit ${CF_LABEL}`,
   )?.[0]
   const cellShowsValue = snap.text.includes("email")
-  if (!panelClosed || !cellBtn || !cellShowsValue) {
+  // The cell text is not proof either (the panel sat right above it): read the
+  // contact back through the API and require the saved value under `custom` --
+  // the save must reach qwbe, not only the page.
+  //
+  // Through the ROW'S OWN endpoint, like scenarioCustomFieldTypes and the
+  // runner's fold probe. NOT through the list: the kernel widens only an
+  // endpoint's top-level success schema with `custom`
+  // (qwbe core/src/runtime-composition.ts, widenTypeLiteral), so a list
+  // response carries `custom` on the `{rows, total}` envelope while Effect
+  // strips it from every row inside. A list-based check here reported
+  // backend=false against a save that had in fact landed.
+  const savedToBackend = (
+    await Promise.all(
+      ((await api.call("/contacts?limit=50")).body?.rows ?? []).map((r) => api.call(`/contacts/${r.id}`)),
+    )
+  ).some((r) => r.body?.custom?.[CF_NAME] === "email")
+  if (!panelClosed || !cellBtn || !cellShowsValue || !savedToBackend) {
     shot("07-inline-RED", { full: true })
     return record(
       name,
       "RED",
-      `cell after save: panel closed=${panelClosed}, edit button=${Boolean(cellBtn)}, value text=${cellShowsValue}`,
+      `cell after save: panel closed=${panelClosed}, edit button=${Boolean(cellBtn)}, value text=${cellShowsValue}, backend=${savedToBackend}`,
       "07-inline-RED.png",
     )
   }
 
-  // 5. delete the definition; the column disappears on the next metadata
-  // read. The panel was closed for the value assertion above, so reopen it
-  // first. The delete is a two-step confirm in the UI (QWB-52 review 17):
-  // the first click scans how many rows carry a value.
-  const reopenBtn = await clickStable((v) => v.role === "button" && v.name === "Custom fields", "Custom fields")
-  if (!reopenBtn) {
-    shot("07-delete-RED", { full: true })
-    return record(name, "RED", "the Custom fields button is gone after closing the panel", "07-delete-RED.png")
-  }
+  // 5. delete the definition in Settings (F2); the column disappears on the
+  // list's next metadata read. Navigation reset the Entity selector, so
+  // address the contacts cube again. The delete is a two-step confirm in the
+  // UI (QWB-52 review 17): the first click scans how many rows carry a value.
+  await open("/settings")
   if (!(await waitForText("Fields defined at runtime", 15_000))) {
     shot("07-delete-RED", { full: true })
-    return record(name, "RED", "definitions panel did not reopen", "07-delete-RED.png")
+    return record(name, "RED", "the definitions panel is not on the settings page", "07-delete-RED.png")
+  }
+  if (!(await chooseEntity("Contacts"))) {
+    shot("07-delete-RED", { full: true })
+    return record(name, "RED", "the Entity selector did not switch back to Contacts", "07-delete-RED.png")
   }
   snap = snapshot()
   const deleteBtn = await clickStable((v) => v.role === "button" && v.name === `Delete ${CF_LABEL}`)
@@ -616,7 +753,18 @@ export async function scenarioCustomField(api) {
     shot("07-delete-RED", { full: true })
     return record(name, "RED", "the delete confirm step did not appear", "07-delete-RED.png")
   }
-  // The column header must vanish from the snapshot.
+  // The definition row must vanish from the panel...
+  let rowGone = true
+  const panelDeadline = Date.now() + 15_000
+  for (;;) {
+    snap = snapshot()
+    rowGone = !Object.values(snap.refs).some((v) => v.role === "button" && v.name === `Delete ${CF_LABEL}`)
+    if (rowGone || Date.now() >= panelDeadline) break
+    await new Promise((r) => setTimeout(r, 500))
+  }
+  // ...and the column must vanish from the list on its next metadata read.
+  await open("/contacts")
+  await settle(CONTACT_LINKED)
   let columnGone = true
   const deadline = Date.now() + 15_000
   for (;;) {
@@ -626,22 +774,26 @@ export async function scenarioCustomField(api) {
     await new Promise((r) => setTimeout(r, 500))
   }
   shot("07-column-gone")
+  // Both vanishings are page reads, not proof qwbe dropped the definition.
+  // Read the definitions back.
+  const stillDefined = (await definitionRows(api, "crm/contacts")).some((r) => r.name === CF_NAME)
+  const deleted = rowGone && columnGone && !stillDefined
   return record(
     name,
-    columnGone ? "PASS" : "RED",
-    columnGone
-      ? "column appeared, was set inline, the saved value is in the cell, and it disappeared after the confirmed delete"
-      : `column ${CF_LABEL} still present after delete; page text: ${snap.text.replace(/\s+/g, " ").slice(0, 300)}`,
+    deleted ? "PASS" : "RED",
+    deleted
+      ? "column appeared, was set inline, the saved value is in the cell and in the backend, and the definition is gone from the panel, the list and qwbe after the confirmed delete"
+      : `after delete: row gone=${rowGone}, column gone=${columnGone}, still defined in qwbe=${stillDefined}; page text: ${snap.text.replace(/\s+/g, " ").slice(0, 300)}`,
     "07-column-gone.png",
   )
 }
 
 // --- 8. the permission half (QWB-52 review 8) ------------------------------------
-// A reader (customfields:read only, no customfields:write) sees NO definitions
-// panel on the contacts list, and a direct call to the definition endpoints
-// answers 403 from qwbe. Runs AFTER the logout scenario: logging in as the
-// reader replaces the browser's session cookie, and the admin scenarios are
-// done by then.
+// A reader (customfields:read only, no customfields:write) gets the Settings
+// area's refusal message instead of the definitions panel (F2 moved the panel
+// there), and a direct call to the definition endpoints answers 403 from
+// qwbe. Runs AFTER the logout scenario: logging in as the reader replaces the
+// browser's session cookie, and the admin scenarios are done by then.
 export async function scenarioReader(qwbePort) {
   const name = "a reader sees no definitions panel and the definition API refuses the write"
   if (!(await loginThroughUi("reader", "reader"))) {
@@ -653,22 +805,22 @@ export async function scenarioReader(qwbePort) {
     shot("08-reader-RED", { full: true })
     return record(name, "RED", `reader login through the UI failed; fields: ${fields.result}`, "08-reader-RED.png")
   }
+  await open("/settings")
+  // The refusal message is the reader's view of the settings page. Settle on
+  // IT, not on "Settings": the nav link carries that label on every page.
+  const told = await waitForText("does not have", 15_000)
   let snap = snapshot()
-  await open("/contacts")
-  // The seeded rows belong to the admin, and entity permissions are
-  // per-owner: a reader sees an empty list (or the access alert), NOT the
-  // seeded contact. Settle on the page heading, never on a seeded row.
-  await settle("Contacts")
-  snap = snapshot()
-  shot("08-reader-contacts")
-  if (snap.text.includes(CONTACT_LINKED)) {
+  shot("08-reader-settings")
+  const noPanel = !snap.text.includes("Fields defined at runtime")
+  const noAdd = !Object.values(snap.refs).some((v) => v.role === "button" && v.name === "Add field")
+  if (!told || !noPanel || !noAdd) {
     shot("08-reader-RED", { full: true })
-    return record(name, "RED", "unexpected: the reader sees admin-owned rows", "08-reader-RED.png")
-  }
-  const panelBtn = refFor(snap.refs, (n) => n === "Custom fields")
-  if (panelBtn) {
-    shot("08-reader-RED", { full: true })
-    return record(name, "RED", "the reader sees a Custom fields button", "08-reader-RED.png")
+    return record(
+      name,
+      "RED",
+      `the reader sees management UI on /settings (message=${told}, noPanel=${noPanel}, noAdd=${noAdd})`,
+      "08-reader-RED.png",
+    )
   }
   // Direct calls against qwbe itself, with a reader session of its own:
   // qwbe must refuse the write, not the proxy.
@@ -825,28 +977,32 @@ async function deleteField(label) {
  * optional, and could not pass no matter what the app did.
  */
 async function dropDefinitions(api, cube, names) {
-  const r = await api.call(`/customfields?cube=${encodeURIComponent(cube)}&limit=200`)
-  const rows = Array.isArray(r.body?.rows) ? r.body.rows : Array.isArray(r.body) ? r.body : []
-  for (const row of rows) {
+  for (const row of await definitionRows(api, cube)) {
     if (names.includes(row.name)) await api.call(`/customfields/${row.id}`, { method: "DELETE" })
   }
+}
+
+/** The definitions qwbe itself holds for `cube` -- the only proof a UI delete landed. */
+async function definitionRows(api, cube) {
+  const r = await api.call(`/customfields?cube=${encodeURIComponent(cube)}&limit=200`)
+  return Array.isArray(r.body?.rows) ? r.body.rows : Array.isArray(r.body) ? r.body : []
 }
 
 export async function scenarioCustomFieldTypes(api, seed) {
   const name = "bool, number and date custom fields set inline; an emptied required text field is refused"
   await dropDefinitions(api, "crm/contacts", [V_NAME, B_NAME, D_NAME, N_NAME])
-  await open("/contacts")
-  await settle(CONTACT_LINKED)
-  let snap = snapshot()
-  const panelBtn = await clickStable((v) => v.role === "button" && v.name === "Custom fields", "Custom fields")
-  if (!panelBtn) {
-    shot("09-panel-RED", { full: true })
-    return record(name, "RED", "no Custom fields button on the contacts list", "09-panel-RED.png")
-  }
+
+  // Definitions are made in Settings (F2), on the contacts entity.
+  await open("/settings")
   if (!(await waitForText("Fields defined at runtime", 15_000))) {
     shot("09-panel-RED", { full: true })
-    return record(name, "RED", "definitions panel did not open", "09-panel-RED.png")
+    return record(name, "RED", "the definitions panel is not on the settings page", "09-panel-RED.png")
   }
+  if (!(await chooseEntity("Contacts"))) {
+    shot("09-entity-RED", { full: true })
+    return record(name, "RED", "the Entity selector did not switch to Contacts", "09-entity-RED.png")
+  }
+  let snap = snapshot()
 
   const failures = []
   for (const [n, l, t, o, req] of [
@@ -857,18 +1013,26 @@ export async function scenarioCustomFieldTypes(api, seed) {
     // qwbe's own refusal, which an optional field would never produce.
     [N_NAME, N_LABEL, "text", null, true],
   ]) {
-    if (!(await defineField(n, l, t, o, req))) failures.push(`define ${n} failed`)
+    if (!(await defineField(n, l, t, o, Boolean(req)))) failures.push(`define ${n} failed`)
   }
   if (failures.length > 0) {
     shot("09-define-RED", { full: true })
     return record(name, "RED", failures.join("; "), "09-define-RED.png")
   }
-  const columnShown = await waitForText(N_LABEL, 15_000)
-  if (!columnShown) {
-    shot("09-column-RED", { full: true })
-    return record(name, "RED", "the note column did not appear after defining", "09-column-RED.png")
+  const definedShown = await waitForText(N_LABEL, 15_000)
+  if (!definedShown) {
+    shot("09-define-RED", { full: true })
+    return record(name, "RED", "the definitions did not appear in the panel", "09-define-RED.png")
   }
-  shot("09-columns-appear")
+  shot("09-definitions-appear")
+
+  // The values are set inline on the contacts list, like any other cell.
+  await open("/contacts")
+  await settle(CONTACT_LINKED)
+  if (!(await waitForText(N_LABEL, 15_000))) {
+    shot("09-column-RED", { full: true })
+    return record(name, "RED", "the note column did not appear on the contacts list", "09-column-RED.png")
+  }
 
   // Set the number field inline through the text editor.
   let ok = true
@@ -983,20 +1147,34 @@ export async function scenarioCustomFieldTypes(api, seed) {
     custom[D_NAME] === "2026-01-02" &&
     custom[N_NAME] === "hello"
 
-  // Clean up every definition (two-step confirm; the panel is still open).
+  // Clean up every definition in Settings (two-step confirm); navigation
+  // reset the Entity selector, so address the contacts cube again.
+  await open("/settings")
+  if (!(await waitForText("Fields defined at runtime", 15_000))) {
+    return record(name, "RED", "the definitions panel is not on the settings page for cleanup", "09-cleanup-RED.png")
+  }
+  if (!(await chooseEntity("Contacts"))) {
+    return record(name, "RED", "the Entity selector did not switch back to Contacts for cleanup", "09-cleanup-RED.png")
+  }
   const cleaned =
     (await deleteField(V_LABEL)) &&
     (await deleteField(B_LABEL)) &&
     (await deleteField(D_LABEL)) &&
     (await deleteField(N_LABEL))
 
-  const pass = ok && helloShown && refused && valueOk && cleaned && dateShown
+  // The deletes are writes as well: rows disappearing from the panel is not
+  // proof. None of the four may still be defined in qwbe.
+  const leftOver = (await definitionRows(api, "crm/contacts"))
+    .map((r) => r.name)
+    .filter((n) => [V_NAME, B_NAME, D_NAME, N_NAME].includes(n))
+
+  const pass = ok && helloShown && refused && valueOk && cleaned && dateShown && leftOver.length === 0
   return record(
     name,
     pass ? "PASS" : "RED",
     pass
-      ? "number 7, bool yes, date 2026-01-02 in the cells and the backend; the emptied required field refused with qwbe's message"
-      : `${noteDetail} values=${JSON.stringify(custom).slice(0, 120)} cleaned=${cleaned} date=${dateShown}`,
+      ? "number 7, bool yes, date 2026-01-02 in the cells and the backend; the emptied required field refused with qwbe's message; every definition gone from qwbe"
+      : `${noteDetail} values=${JSON.stringify(custom).slice(0, 120)} cleaned=${cleaned} date=${dateShown} leftOver=${leftOver.join(",") || "none"}`,
     "09-required-refused.png",
   )
 }
@@ -1015,9 +1193,10 @@ export async function runAll(api, seed) {
     return verdicts
   }
   verdicts.push(await scenarioList())
-  verdicts.push(await scenarioInlineEdit())
+  verdicts.push(await scenarioInlineEdit(api))
   verdicts.push(await scenarioNonEditable(api))
   verdicts.push(await scenarioNavigation(seed))
+  verdicts.push(await scenarioCreateOrganization(api))
   verdicts.push(await scenarioCustomField(api))
   verdicts.push(await scenarioCustomFieldTypes(api, seed))
   verdicts.push(await scenarioLogout())

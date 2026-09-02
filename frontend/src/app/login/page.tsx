@@ -52,7 +52,11 @@ export default function LoginPage() {
       return
     }
     toast.success("Signed in")
-    router.push("/me")
+    // Back to where the middleware (or an expired session) interrupted, when
+    // it named a route of this app: an absolute or protocol-relative value
+    // would turn the login page into an open redirect.
+    const next = new URLSearchParams(window.location.search).get("next")
+    router.push(next && next.startsWith("/") && !next.startsWith("//") ? next : "/me")
   }
 
   return (
@@ -88,7 +92,7 @@ export default function LoginPage() {
                   required
                 />
                 {error ? <FieldError>{error}</FieldError> : null}
-                <FieldDescription>The credentials come from your qwbe account.</FieldDescription>
+                <FieldDescription>The credentials come from your qwbe user.</FieldDescription>
               </Field>
               <Button type="submit" disabled={pending || !hydrated}>
                 {pending ? "Signing in..." : "Sign in"}

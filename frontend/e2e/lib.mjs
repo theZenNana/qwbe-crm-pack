@@ -1,3 +1,4 @@
+// @ts-check
 // Shared helpers for the Orca-driven end-to-end scenarios (QWB-51).
 //
 // Plain Node, no new dependencies. Three concerns live here:
@@ -42,7 +43,7 @@ export const CONFIG = {
   // `permissions` is the entity-permission provider: without it every create answers 500 with
   // `PermissionInvalid: entity permissions provider unavailable` and nothing can be seeded.
   mounted:
-    "auth,account,permissions,settings,cli,catalog,links,crm,crm/accounts,crm/contacts,crm/contracts,customfields",
+    "auth,account,permissions,settings,cli,catalog,links,crm,crm/organizations,crm/contacts,crm/contracts,customfields",
 }
 
 // ---------------------------------------------------------------------------

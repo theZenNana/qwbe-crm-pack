@@ -2,10 +2,11 @@
 // Verification for the QWB-50 import: COUNTS only, never a row value.
 //
 // Per entity it prints: rows exported (line count of the JSONL), rows in the staging set
-// (optional), rows living in qwbe (the accounts count command; the contacts page total),
+// (optional), rows living in qwbe (the organizations count command; the contacts page total),
 // and the differences. For the organization-to-contact relation it counts, from the export
-// files and the accounts ledger, how many contacts point at an organization that never made
-// it into qwbe.
+// file and externalId lookups into qwbe (QWB-54, ticket 13 -- the id map files are gone; the
+// correspondence lives on the rows), how many contacts point at an organization that never
+// made it into qwbe.
 //
 // Environment: QWBE_URL, QWBE_USER, QWBE_PASSWORD (all required; the tool exits 2
 // without them, and fails fast on a rejected login instead of printing n/a counts).
@@ -13,7 +14,6 @@
 // Usage: node tools/vtiger-verify.mjs <accounts.jsonl> [contacts.jsonl] [--set-accounts ID] [--set-contacts ID]
 
 import { createReadStream } from "node:fs"
-import { dirname, join } from "node:path"
 import { createInterface } from "node:readline"
 
 const positional = process.argv.slice(2).filter((a) => !a.startsWith("--"))
@@ -76,7 +76,7 @@ const accountsInQwbe = async () => {
   const r = await call("/cli/exec", {
     method: "POST",
     headers: H(),
-    body: JSON.stringify({ line: "crm/accounts:count" }),
+    body: JSON.stringify({ line: "crm/organizations:count" }),
   })
   return r.ok ? Number(r.body.output) : undefined
 }
@@ -94,19 +94,14 @@ const line = async (label, file, setId, inQwbe) => {
   return exported
 }
 
-const accountsExported = await line("accounts", accountsFile, flag("--set-accounts"), await accountsInQwbe())
+await line("accounts", accountsFile, flag("--set-accounts"), await accountsInQwbe())
 if (contactsFile) {
   await line("contacts", contactsFile, flag("--set-contacts"), await contactsInQwbe())
 
-  // Organization-to-contact divergences, from the ledgers and the export files only.
-  const ledgerPath = join(dirname(accountsFile), "accounts-idmap.json")
-  let ledger = {}
-  try {
-    ledger = JSON.parse((await import("node:fs")).readFileSync(ledgerPath, "utf8"))
-  } catch {}
+  // Organization-to-contact divergences, from the export file plus one externalId lookup per
+  // DISTINCT organization (cached by the Set -- thousands of contacts share one organization).
   let withOrg = 0
-  let orgImported = 0
-  let orgMissing = 0
+  const orgKeys = new Set()
   const rl = createInterface({ input: createReadStream(contactsFile, { encoding: "utf8" }), crlfDelay: Infinity })
   for await (const l of rl) {
     if (l.trim() === "") continue
@@ -119,10 +114,15 @@ if (contactsFile) {
     const org = row.accountid
     if (org === undefined || org === null || String(org) === "0" || String(org) === "") continue
     withOrg++
-    if (ledger[String(org)]) orgImported++
+    orgKeys.add(String(org))
+  }
+  let orgImported = 0
+  let orgMissing = 0
+  for (const orgKey of orgKeys) {
+    const r = await call(`/organizations?externalId=${encodeURIComponent(`vtiger:${orgKey}`)}&limit=1`, { headers: H() })
+    if (r.ok && (r.body.total ?? 0) > 0) orgImported++
     else orgMissing++
   }
   console.log(`org-to-contact: contacts with an organization=${withOrg} organization imported=${orgImported} organization missing=${orgMissing}`)
-  console.log(`accounts ledger entries=${Object.keys(ledger).length} (exported ${accountsExported})`)
 }
 console.log("verification: counts only, no row value printed")

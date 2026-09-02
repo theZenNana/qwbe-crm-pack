@@ -13,6 +13,7 @@ import {
   canDefineFields,
   canEdit,
   columnsFromFields,
+  createPayloadOf,
   customValueOf,
   coerce,
   cubeApiPath,
@@ -34,6 +35,7 @@ import {
   type FieldMetadata,
   type PageOf,
   type Row,
+  pageWindow,
 } from "./cube.ts"
 
 const field = (over: Partial<FieldMetadata> = {}): FieldMetadata => ({
@@ -72,7 +74,7 @@ describe("list request parameters", () => {
       limit: 50,
       sortBy: "name",
       descending: true,
-      filters: { accountId: "acc-1" },
+      filters: { organizationId: "org-1" },
     })
     const parsed = new URLSearchParams(qs)
     assert.equal(parsed.get("offset"), "25")
@@ -81,20 +83,20 @@ describe("list request parameters", () => {
     assert.equal(parsed.get("descending"), "true")
     // The search surface the backend serves: field equality on a searchable
     // field, not a client-side slice.
-    assert.equal(parsed.get("accountId"), "acc-1")
+    assert.equal(parsed.get("organizationId"), "org-1")
   })
 
   it("builds the full list path under the cube's served prefix", () => {
     // A child cube serves under its leaf ("crm/contacts" -> /contacts), so the
     // list request goes there, not to a two-segment path qwbe never mounted.
     assert.equal(
-      listApiPath("crm/contacts", { offset: 0, limit: 25, sortBy: "name", filters: { accountId: "acc-9" } }),
-      "/api/qwbe/contacts?offset=0&limit=25&sortBy=name&accountId=acc-9",
+      listApiPath("crm/contacts", { offset: 0, limit: 25, sortBy: "name", filters: { organizationId: "org-9" } }),
+      "/api/qwbe/contacts?offset=0&limit=25&sortBy=name&organizationId=org-9",
     )
   })
 
   it("drops an empty filter value instead of sending it", () => {
-    assert.equal(listQueryString({ filters: { accountId: "" } }), "")
+    assert.equal(listQueryString({ filters: { organizationId: "" } }), "")
   })
 
   it("a filter key named like a paging key cannot override paging", () => {
@@ -108,7 +110,7 @@ describe("list request parameters", () => {
 
 describe("metadata paths", () => {
   it("percent-encodes a child cube name for the metadata endpoint", () => {
-    assert.equal(metadataApiPath("crm/accounts"), "/api/qwbe/catalog/crm%2Faccounts/metadata")
+    assert.equal(metadataApiPath("crm/organizations"), "/api/qwbe/catalog/crm%2Forganizations/metadata")
   })
 
   it("reaches rows through the proxy under the cube's served prefix", () => {
@@ -166,14 +168,14 @@ describe("inline editing", () => {
   })
 
   it("an editable relation field is editable too, as the metadata declares", () => {
-    // accountId is editable: true in the metadata; the component must not
+    // organizationId is editable: true in the metadata; the component must not
     // narrow that on its own.
-    const accountId = field({
-      name: "accountId",
+    const organizationId = field({
+      name: "organizationId",
       editable: true,
-      relation: { target: "crm/accounts", entity: "Organization", summary: "summaryById" },
+      relation: { target: "crm/organizations", entity: "Organization", summary: "summaryById" },
     })
-    assert.equal(canEdit(accountId), true)
+    assert.equal(canEdit(organizationId), true)
   })
 })
 
@@ -221,14 +223,14 @@ describe("saving an inline edit", () => {
   const patchCalls: Array<{ url: string; init?: RequestInit }> = []
   const okFetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
     patchCalls.push({ url: String(url), init })
-    return new Response(JSON.stringify({ id: "acc-1", name: "Renamed", industry: "tech" }), { status: 200 })
+    return new Response(JSON.stringify({ id: "org-1", name: "Renamed", industry: "tech" }), { status: 200 })
   }) as unknown as typeof fetch
 
   it("PATCHes exactly the edited key to the row and merges only that key", async () => {
     patchCalls.length = 0
     const result = await saveCell({
-      rowPath: "/api/qwbe/accounts/acc-1",
-      row: { id: "acc-1", name: "Old" } as Row,
+      rowPath: "/api/qwbe/organizations/org-1",
+      row: { id: "org-1", name: "Old" } as Row,
       field: field({ name: "name" }),
       next: "Renamed",
       doFetch: okFetch,
@@ -241,15 +243,15 @@ describe("saving an inline edit", () => {
       assert.equal(result.value, "Renamed")
     }
     assert.equal(patchCalls.length, 1)
-    assert.equal(patchCalls[0].url, "/api/qwbe/accounts/acc-1")
+    assert.equal(patchCalls[0].url, "/api/qwbe/organizations/org-1")
     assert.deepEqual(JSON.parse(String(patchCalls[0].init?.body)), { name: "Renamed" })
   })
 
   it("a value equal to the current one sends no request at all", async () => {
     patchCalls.length = 0
     const result = await saveCell({
-      rowPath: "/api/qwbe/accounts/acc-1",
-      row: { id: "acc-1", name: "Same" } as Row,
+      rowPath: "/api/qwbe/organizations/org-1",
+      row: { id: "org-1", name: "Same" } as Row,
       field: field({ name: "name" }),
       next: "Same",
       doFetch: okFetch,
@@ -271,8 +273,8 @@ describe("saving an inline edit", () => {
         { status: 400 },
       )) as unknown as typeof fetch
     const result = await saveCell({
-      rowPath: "/api/qwbe/accounts/acc-1",
-      row: { id: "acc-1", name: "Old" } as Row,
+      rowPath: "/api/qwbe/organizations/org-1",
+      row: { id: "org-1", name: "Old" } as Row,
       field: field({ name: "name" }),
       next: "",
       doFetch: refusedFetch,
@@ -315,7 +317,7 @@ describe("qwbe error messages", () => {
 
 describe("relation links", () => {
   it("resolves a relation target to the detail route of the target cube", () => {
-    assert.equal(hrefForRelation("crm/accounts", "acc-1"), "/accounts/acc-1")
+    assert.equal(hrefForRelation("crm/organizations", "org-1"), "/organizations/org-1")
   })
 
   it("handles a root-level cube name", () => {
@@ -333,7 +335,7 @@ describe("relation links", () => {
 
   it("builds a row link for a cube this app routes", () => {
     assert.equal(rowHref("crm/contacts", "ct-1"), "/contacts/ct-1")
-    assert.equal(rowHref("accounts", "acc-1"), "/accounts/acc-1")
+    assert.equal(rowHref("organizations", "org-1"), "/organizations/org-1")
   })
 
   it("no row link for a cube without a route", () => {
@@ -347,13 +349,13 @@ describe("relation titles", () => {
     const doFetch = (async (input: RequestInfo | URL) => {
       calls.push(String(input))
       if (String(input).includes("/metadata")) {
-        return new Response(JSON.stringify(meta({ cube: "crm/accounts", entity: "Organization" })))
+        return new Response(JSON.stringify(meta({ cube: "crm/organizations", entity: "Organization" })))
       }
-      return new Response(JSON.stringify({ id: "acc-1", name: "Acme SRL" }))
+      return new Response(JSON.stringify({ id: "org-1", name: "Acme SRL" }))
     }) as unknown as typeof fetch
-    assert.equal(await resolveRelationTitle("crm/accounts", "acc-1", doFetch), "Acme SRL")
+    assert.equal(await resolveRelationTitle("crm/organizations", "org-1", doFetch), "Acme SRL")
     assert.ok(calls.some((c) => c.includes("/catalog/")), "the target metadata is read")
-    assert.ok(calls.some((c) => c.endsWith("/accounts/acc-1")), "the target row is read")
+    assert.ok(calls.some((c) => c.endsWith("/organizations/org-1")), "the target row is read")
   })
 
   it("falls back to the raw id when the target does not answer", async () => {
@@ -367,8 +369,8 @@ describe("paging shape and response use", () => {
     // The exact URL the list component fetches: paging and sorting travel to
     // qwbe; the limit is the page size, so 60 thousand rows are never pulled.
     assert.equal(
-      listApiPath("crm/accounts", { offset: 50, limit: 25, sortBy: "name" }),
-      "/api/qwbe/accounts?offset=50&limit=25&sortBy=name",
+      listApiPath("crm/organizations", { offset: 50, limit: 25, sortBy: "name" }),
+      "/api/qwbe/organizations?offset=50&limit=25&sortBy=name",
     )
   })
 
@@ -377,7 +379,7 @@ describe("paging shape and response use", () => {
     // receives is parsed exactly as the component parses it, and the title the
     // detail header shows comes out of the returned rows.
     const page: PageOf<Row> = {
-      rows: [{ id: "acc-1", name: "Acme SRL" }],
+      rows: [{ id: "org-1", name: "Acme SRL" }],
       total: 60_000,
       offset: 0,
       limit: 25,
@@ -389,13 +391,13 @@ describe("paging shape and response use", () => {
       return new Response(JSON.stringify(page))
     }) as unknown as typeof fetch
     try {
-      const url = listApiPath("crm/accounts", { offset: 0, limit: 25 })
-      assert.equal(url, "/api/qwbe/accounts?offset=0&limit=25")
+      const url = listApiPath("crm/organizations", { offset: 0, limit: 25 })
+      assert.equal(url, "/api/qwbe/organizations?offset=0&limit=25")
       const response = await globalThis.fetch(`http://x.test${url}`)
       const received = (await response.json()) as PageOf<Row>
       assert.equal(received.rows[0].name, "Acme SRL")
       assert.equal(received.total, 60_000)
-      assert.equal(titleOf(meta({ cube: "crm/accounts", entity: "Organization" }), received.rows[0]), "Acme SRL")
+      assert.equal(titleOf(meta({ cube: "crm/organizations", entity: "Organization" }), received.rows[0]), "Acme SRL")
       assert.equal(fetchedUrl, `http://x.test${url}`)
     } finally {
       globalThis.fetch = realFetch
@@ -404,7 +406,7 @@ describe("paging shape and response use", () => {
 
   it("the row title falls back to the id when no required field has a value", () => {
     const { titleOf: t } = require("./cube.ts") as typeof import("./cube.ts")
-    assert.equal(t(meta(), { id: "acc-2", name: null }), "acc-2")
+    assert.equal(t(meta(), { id: "org-2", name: null }), "org-2")
   })
 })
 
@@ -565,5 +567,87 @@ describe("the definitions panel follows the permission", () => {
 
   it("a user with customfields:write gets the panel", () => {
     assert.equal(canDefineFields(["customfields:write"]), true)
+  })
+})
+
+describe("pageWindow", () => {
+  it("counts pages from the offset and the page size", () => {
+    assert.deepEqual(pageWindow(0, 25, 60000), { currentPage: 1, lastPage: 2400 })
+    assert.deepEqual(pageWindow(75, 25, 60000), { currentPage: 4, lastPage: 2400 })
+    // A bigger page size means fewer pages for the same rows.
+    assert.deepEqual(pageWindow(0, 200, 60000), { currentPage: 1, lastPage: 300 })
+  })
+
+  it("has one page for an empty cube and none at all without a total", () => {
+    assert.deepEqual(pageWindow(0, 25, 0), { currentPage: 1, lastPage: 1 })
+    assert.deepEqual(pageWindow(50, 25, undefined), { currentPage: 3, lastPage: undefined })
+  })
+})
+
+describe("the create payload", () => {
+  const orgFields = [
+    field({ name: "name", label: "Name", required: true }),
+    field({ name: "externalId", label: "External ID", nullable: true }),
+    field({ name: "industry", label: "Industry", nullable: true }),
+    field({ name: "employees", label: "Employees", type: "integer", nullable: true }),
+  ]
+
+  it("carries only the filled fields, coerced like an inline edit", () => {
+    const { payload, missing } = createPayloadOf(orgFields, {
+      name: "  Acme  ",
+      industry: "Software",
+      employees: "42",
+    })
+    // Untouched fields are absent, so the create schema's defaults apply;
+    // values are trimmed, numbers become numbers, required non-nullable
+    // strings travel as the trimmed text.
+    assert.deepEqual(payload, { name: "Acme", industry: "Software", employees: 42 })
+    assert.deepEqual(missing, [])
+  })
+
+  it("reports a required field left empty by its label, and sends nothing", () => {
+    const { payload, missing } = createPayloadOf(orgFields, {
+      name: "   ",
+      industry: "Software",
+    })
+    assert.deepEqual(payload, { industry: "Software" })
+    assert.deepEqual(missing, ["Name"])
+  })
+
+  it("skips whitespace-only optional fields instead of storing empty strings", () => {
+    const { payload } = createPayloadOf(orgFields, {
+      name: "Acme",
+      externalId: " ",
+    })
+    assert.deepEqual(payload, { name: "Acme" })
+  })
+
+  it("treats a missing key as an untouched field", () => {
+    const { payload, missing } = createPayloadOf(orgFields, {})
+    assert.deepEqual(payload, {})
+    assert.deepEqual(missing, ["Name"])
+  })
+
+  // The sandbox's required custom flags (form/tva/cui, the vtiger mirror): a
+  // required BOOLEAN must reach qwbe as false when untouched -- an unchecked
+  // box is a value, not an absence -- while a required enum still refuses.
+  const vatFields = [
+    field({ name: "name", label: "Name", required: true }),
+    field({ name: "tva", label: "TVA", type: "boolean", nullable: false, required: true }),
+    field({ name: "form", label: "Form", nullable: false, enum: ["SRL", "SA"], required: true }),
+  ]
+
+  it("sends an untouched required boolean as false, never as a refusal", () => {
+    const untouched = createPayloadOf(vatFields, { name: "Acme" })
+    assert.deepEqual(untouched.payload, { name: "Acme", tva: false })
+    assert.deepEqual(untouched.missing, ["Form"])
+    const toggledOff = createPayloadOf(vatFields, { name: "Acme", tva: "false" })
+    assert.deepEqual(toggledOff.payload, { name: "Acme", tva: false })
+    assert.deepEqual(toggledOff.missing, ["Form"])
+  })
+
+  it("reports a required enum left unchosen by its label", () => {
+    const { missing } = createPayloadOf(vatFields, { name: "Acme", tva: "true" })
+    assert.deepEqual(missing, ["Form"])
   })
 })

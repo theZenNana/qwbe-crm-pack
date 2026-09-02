@@ -78,35 +78,62 @@ export function canDefineFields(permissions: ReadonlyArray<string>): boolean {
 
 // The query-string keys qwbe's list contract owns. A cube field with one of
 // these names must never be sent as a bare filter key, or it would override
-// paging.
-const RESERVED_QUERY_KEYS = new Set(["offset", "limit", "sortBy", "descending"])
+// paging. `q` and `ids` are reserved for the same reason: qwbe's list contract
+// reads them itself (q scans the searchable fields, ids fetches a batch), so a
+// field of one of those names must not arrive as a bare filter key either.
+const RESERVED_QUERY_KEYS = new Set(["offset", "limit", "sortBy", "descending", "q", "ids"])
 
 export type ListParams = {
   offset?: number
   limit?: number
   sortBy?: string
   descending?: boolean
-  // Field filters (server-side equality, e.g. accountId on contacts). Keys are
+  // Field filters (server-side equality, e.g. organizationId on contacts). Keys are
   // field NAMES from the metadata, never hard-coded per entity here.
   filters?: Record<string, string>
 }
 
 // The single first path segment a cube serves under. qwbe mounts a child cube
-// ("crm/accounts") at "/<leaf>" (core/src/kernel/routes.ts routePrefixOf; a leaf
+// ("crm/organizations") at "/<leaf>" (core/src/kernel/routes.ts routePrefixOf; a leaf
 // that collides with a standalone cube is mounted as "<parent>-<name>"). The
 // HTTP prefix therefore comes from the leaf, never from the full cube name.
 export function httpPrefixOf(cube: string): string {
   return cube.includes("/") ? cube.split("/").pop()! : cube
 }
 
-// Proxy path for a cube-relative qwbe path: the cube "crm/accounts" becomes
-// /api/qwbe/accounts, because that is the prefix the cube actually serves at.
+// The browser's single reaction to a 401 from the proxy: the session is dead
+// and the proxy already cleared the cookie on the way out, so leave for /login
+// with this page as the destination. Painting the status into the page instead
+// ("list request failed: 401") left the person on a view that could never
+// recover until they typed /login themselves (QWB-54).
+// Same signature as fetch, so it drops in wherever a `typeof fetch` is asked for.
+export async function apiFetch(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<Response> {
+  const response = await fetch(input, init)
+  if (response.status === 401 && typeof window !== "undefined") {
+    const here = window.location.pathname + window.location.search
+    // replace, not push: the page we are leaving cannot be rendered without a
+    // session, so Back must not return to it. A full document load (not a
+    // router push) is deliberate -- it drops the client state of a dead
+    // session and lets the middleware see the cleared cookie.
+    window.location.replace(`/login?next=${encodeURIComponent(here)}`)
+    // Never resolves: the caller must not render an error over a page that is
+    // already navigating away.
+    await new Promise(() => undefined)
+  }
+  return response
+}
+
+// Proxy path for a cube-relative qwbe path: the cube "crm/organizations" becomes
+// /api/qwbe/organizations, because that is the prefix the cube actually serves at.
 export function cubeApiPath(cube: string, suffix = ""): string {
   return `/api/qwbe/${httpPrefixOf(cube)}${suffix}`
 }
 
 // Metadata is under /catalog/{cube}/metadata and a child cube name
-// ("crm/accounts") is a single path parameter, so it must be percent-encoded.
+// ("crm/organizations") is a single path parameter, so it must be percent-encoded.
 export function metadataApiPath(cube: string): string {
   return `/api/qwbe/catalog/${encodeURIComponent(cube)}/metadata`
 }
@@ -160,6 +187,23 @@ export function canEdit(field: FieldMetadata): boolean {
 
 // The sort a column click produces: undefined for a column the metadata does
 // not mark sortable, so a non-sortable header can never trigger a request.
+/**
+ * Where the reader is in the result set, for a paginator that can jump.
+ *
+ * `lastPage` is undefined when qwbe reports no total: nothing can then say how
+ * many pages exist, and only a short page proves the end was reached.
+ */
+export function pageWindow(
+  offset: number,
+  pageSize: number,
+  total: number | undefined,
+): { currentPage: number; lastPage: number | undefined } {
+  return {
+    currentPage: Math.floor(offset / pageSize) + 1,
+    lastPage: total === undefined ? undefined : Math.max(1, Math.ceil(total / pageSize)),
+  }
+}
+
 export function sortRequestFor(
   column: ColumnSpec,
   currentSortBy: string | undefined,
@@ -212,9 +256,9 @@ export async function errorBody(response: Response): Promise<unknown> {
 // The frontend routes this app actually has. A relation whose target has no
 // route renders as plain text instead of a dead link.
 const RELATION_ROUTES: Record<string, string> = {
-  "crm/accounts": "/accounts",
+  "crm/organizations": "/organizations",
   "crm/contacts": "/contacts",
-  accounts: "/accounts",
+  organizations: "/organizations",
   contacts: "/contacts",
 }
 
@@ -258,19 +302,35 @@ export function clearRelationMetaCache(): void {
   metaCache.clear()
 }
 
+// Fetches (and session-caches) a cube's published metadata, or null when the
+// request fails. Shared by every relation surface: batch cell resolution and
+// the typeahead both need the title field, and each cube's metadata is fetched
+// at most once per session.
+export async function relationMeta(
+  target: string,
+  doFetch: typeof fetch = apiFetch,
+): Promise<CubeMetadata | null> {
+  const hit = metaCache.get(target)
+  if (hit) return hit
+  try {
+    const r = await doFetch(metadataApiPath(target))
+    if (!r.ok) return null
+    const meta = (await r.json()) as CubeMetadata
+    metaCache.set(target, meta)
+    return meta
+  } catch {
+    return null
+  }
+}
+
 export async function resolveRelationTitle(
   target: string,
   id: string,
-  doFetch: typeof fetch = fetch,
+  doFetch: typeof fetch = apiFetch,
 ): Promise<string> {
   try {
-    let meta = metaCache.get(target)
-    if (!meta) {
-      const r = await doFetch(metadataApiPath(target))
-      if (!r.ok) return id
-      meta = (await r.json()) as CubeMetadata
-      metaCache.set(target, meta)
-    }
+    const meta = await relationMeta(target, doFetch)
+    if (!meta) return id
     const r = await doFetch(cubeApiPath(target, `/${id}`))
     if (!r.ok) return id
     const row = (await r.json()) as Row
@@ -297,6 +357,31 @@ export function coerce(field: FieldMetadata, value: string): unknown {
     return Number.isFinite(n) ? n : value
   }
   return value
+}
+
+// The body of a create request, built from the form's string values with the
+// SAME coerce the inline editor saves with. Untouched fields (empty after
+// trim) are skipped, so the payload carries only what was filled and the
+// create schema's defaults apply to the rest; a required field left empty is
+// reported by its label, so the form can refuse the submit with qwbe's own
+// field names instead of a 400 round trip. A boolean is the exception: an
+// untouched checkbox IS a value (false), not an absence -- a required boolean
+// (the sandbox's TVA flag) must reach qwbe as false, not as a refusal.
+export function createPayloadOf(
+  fields: FieldMetadata[],
+  values: Record<string, string>,
+): { payload: Record<string, unknown>; missing: string[] } {
+  const payload: Record<string, unknown> = {}
+  const missing: string[] = []
+  for (const field of fields) {
+    const value = (values[field.name] ?? "").trim()
+    if (value === "" && field.type !== "boolean") {
+      if (field.required) missing.push(field.label)
+    } else {
+      payload[field.name] = coerce(field, value)
+    }
+  }
+  return { payload, missing }
 }
 
 export type SaveResult =

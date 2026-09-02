@@ -1,6 +1,7 @@
 // Plain Request/Response handlers (no next/server imports) so this route can
 // be unit tested with node:test and a stubbed fetch.
 import {
+  hostOf,
   loginToQwbe,
   serializeSessionCookie,
   sessionCookie,
@@ -28,7 +29,14 @@ export async function POST(request: Request) {
   }
 
   const cookie = serializeSessionCookie(
-    sessionCookie(result.token, result.expiresAt, process.env.NODE_ENV === "production"),
+    // The cookie is named after the host the browser asked for, so two
+    // frontends on localhost keep separate sessions in one cookie jar.
+    sessionCookie(
+      result.token,
+      result.expiresAt,
+      process.env.NODE_ENV === "production",
+      hostOf(request.headers),
+    ),
   )
   // The token goes into the Set-Cookie header only; the body never carries it.
   return new Response(JSON.stringify({ ok: true }), {

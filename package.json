@@ -4,19 +4,23 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "QWBE_REPO=\"${QWBE_REPO:-$PWD/../../qwbe}\" node --test source-contract.test.mjs cubes/crm/contacts/index.test.ts cubes/crm/contracts/index.test.ts cubes/crm/accounts/index.test.ts tools/import.test.mjs",
+    "test": "QWBE_REPO=\"${QWBE_REPO:-$PWD/../../qwbe}\" node --test source-contract.test.mjs cubes/crm/contacts/index.test.ts cubes/crm/contracts/index.test.ts cubes/crm/organizations/index.test.ts tools/import.test.mjs tools/ensure-external-id-index.test.mjs tools/backfill-contact-organizationid.test.mjs tools/seed-demo.test.mjs",
+    "lint": "eslint .",
     "test:source": "node --test source-contract.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@effect/platform": "^0.96.0",
     "effect": "^3.21.0",
-    "qwbe-core": "file:../../../qwbe/core"
+    "qwbe-core": "file:../../qwbe/core"
   },
   "devDependencies": {
+    "@effect/eslint-plugin": "^0.3.2",
     "@types/node": "^26.0.0",
+    "eslint": "^10.9.1",
     "mysql2": "^3.24.2",
     "pg": "^8.23.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.68.0"
   }
 }

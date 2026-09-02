@@ -6,6 +6,18 @@
     "moduleResolution": "NodeNext",
     "noEmit": true,
     "noUncheckedIndexedAccess": true,
+    // Mirrors qwbe core/tsconfig.json:33-34. The kernel's install gate compiles
+    // this pack with them on, so a green typecheck here that lacked them was
+    // worth nothing: TS6133 (unused EntityMeta import) passed the pack and was
+    // refused by the kernel (QWB-54, ticket 23).
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "verbatimModuleSyntax": true,
+    "forceConsistentCasingInFileNames": true,
+    "esModuleInterop": true,
     "skipLibCheck": true,
     "strict": true,
     "target": "ES2022"

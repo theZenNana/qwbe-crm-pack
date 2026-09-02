@@ -11,8 +11,9 @@
 // that looks authoritative and means nothing. The summary and the `contracts:value` command
 // render per-currency, never a single grand total.
 //
-// What this cube is NOT: there is no ERP here. No account entity, no invoice, no settings —
-// the historical ERP package is a different package and stays out of the CRM restore.
+// What this cube is NOT: there is no ERP here. No organization entity of its own, no invoice,
+// no settings — the historical ERP package is a different package and stays out of the CRM
+// restore.
 //
 // Adapted (QWB-30) from the pre-QWB-19 source preserved at qwbe-packs onto `defineCube` and
 // the current public contract; behaviour unchanged.
@@ -24,7 +25,7 @@ import { defineCube } from "qwbe-core/cube"
 import { EntityMeta, type SummaryRow } from "qwbe-core/entity"
 import { Forbidden, NotFound } from "qwbe-core/errors"
 import { PageOf } from "qwbe-core/http"
-import { PageParams, pageRequest } from "qwbe-core/pagination"
+import { genericList, ListParams } from "qwbe-core/list"
 
 const TABLE = "contracts"
 const ENTITY = "Contract"
@@ -62,7 +63,7 @@ type ContractRow = typeof Contract.Type
 
 const group = HttpApiGroup.make("contracts")
   .add(
-    HttpApiEndpoint.get("list")`/contracts`.setUrlParams(PageParams).addSuccess(PageOf(Contract)).addError(Forbidden),
+    HttpApiEndpoint.get("list")`/contracts`.setUrlParams(ListParams).addSuccess(PageOf(Contract)).addError(Forbidden),
   )
   .add(
     HttpApiEndpoint.get("get")`/contracts/${HttpApiSchema.param("id", Schema.String)}`
@@ -84,21 +85,30 @@ const summary = (c: ContractRow): SummaryRow => ({
   ],
 })
 
+// Named, because the kernel's generic list handler reads its `searchable` (and the declared
+// relations) to build the query it serves (QWB-54, ticket 07): the manifest is the whole
+// answer, so the handler must see it. No `searchable` is declared: nothing filters this
+// list yet, and a declaration made speculatively would serve a filter nobody asked for.
+const manifest = {
+  name: "contracts",
+  // Opts the cube into the metadata drift gate (qwbe src/metadata/schema-drift.ts):
+  // an undeclared version means a schema change cannot be caught (QWB-54).
+  version: "1.0.0",
+  parent: "crm",
+  tables: [TABLE],
+  entity: ENTITY,
+  sortable: ["title", "amount", "signedAt", "createdAt"],
+  requiresAuth: true,
+  permissions: [
+    { name: "crm/contracts:read", roles: ["admin", "reader"] },
+    { name: "crm/contracts:write", roles: ["admin"] },
+  ],
+  publishes: ["crm/contracts.created"],
+  dataMigration: [{ fromCube: "contracts", toCube: "crm/contracts", fromPlugin: "crm-pack" }],
+}
+
 export const cube = defineCube(group, {
-  manifest: {
-    name: "contracts",
-    parent: "crm",
-    tables: [TABLE],
-    entity: ENTITY,
-    sortable: ["title", "amount", "signedAt", "createdAt"],
-    requiresAuth: true,
-    permissions: [
-      { name: "crm/contracts:read", roles: ["admin", "reader"] },
-      { name: "crm/contracts:write", roles: ["admin"] },
-    ],
-    publishes: ["crm/contracts.created"],
-    dataMigration: [{ fromCube: "contracts", toCube: "crm/contracts", fromPlugin: "crm-pack" }],
-  },
+  manifest,
 
   create: ({ store, bus }) => ({
     commands: [
@@ -135,11 +145,14 @@ export const cube = defineCube(group, {
     ],
 
     handlers: {
-      list: ({ urlParams }) =>
-        Effect.gen(function* () {
-          yield* requirePermission("crm/contracts:read")
-          return yield* store.page<ContractRow>(TABLE, pageRequest(urlParams))
-        }),
+      // The kernel's list, not this cube's (QWB-54, ticket 07): paging and sorting from the
+      // manifest, permission required inside the generic handler.
+      list: genericList<ContractRow>({
+        cube: "crm/contracts",
+        table: TABLE,
+        manifest,
+        store,
+      }),
 
       get: ({ path }) =>
         Effect.gen(function* () {

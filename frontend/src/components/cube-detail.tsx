@@ -9,6 +9,7 @@ import Link from "next/link"
 import { useEffect, useState } from "react"
 
 import {
+  apiFetch,
   type CubeMetadata,
   type Row,
   cubeApiPath,
@@ -27,7 +28,7 @@ import { CubeList } from "@/components/cube-list"
 export type ChildList = {
   // The cube the child rows live in, e.g. "crm/contacts".
   cube: string
-  // The field on the child that points back to this row, e.g. "accountId".
+  // The field on the child that points back to this row, e.g. "organizationId".
   field: string
   label?: string
 }
@@ -48,11 +49,11 @@ export function CubeDetail({
   useEffect(() => {
     let alive = true
     Promise.all([
-      fetch(metadataApiPath(cube)).then(async (r) => {
+      apiFetch(metadataApiPath(cube)).then(async (r) => {
         if (!r.ok) throw new Error(`metadata request failed: ${r.status}`)
         return (await r.json()) as CubeMetadata
       }),
-      fetch(cubeApiPath(cube, `/${id}`)).then(async (r) => {
+      apiFetch(cubeApiPath(cube, `/${id}`)).then(async (r) => {
         if (!r.ok) throw new Error(`row request failed: ${r.status}`)
         return (await r.json()) as Row
       }),
@@ -121,7 +122,7 @@ export function CubeDetail({
       {childLists.map((child) => (
         <section key={child.cube} className="flex flex-col gap-2">
           <h2 className="text-lg font-semibold">{child.label ?? child.cube}</h2>
-          <CubeList cube={child.cube} fixedFilters={{ [child.field]: id }} topLevel={false} />
+          <CubeList cube={child.cube} fixedFilters={{ [child.field]: id }} />
           <Link className="text-sm underline" href={routeOf(child.cube)}>
             All rows
           </Link>

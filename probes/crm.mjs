@@ -12,9 +12,9 @@
 //
 //   QWBE_REPO=~/Projects/qwbe node probes/crm.mjs
 //
-// The plugin must be installed first (QWB-31):
-//   POST /settings/packages/install-from {"path": "~/Projects/qwbe-packs/plugins/crm-pack"}
-// and the server restarted, or simply copy this directory to <qwbe>/core/plugins/crm-pack.
+// The plugin must be installed first - the official path (QWB-54, ticket 22):
+//   settings:install-from <this directory>  (or POST /settings/packages/install-from)
+// and the server restarted. Never a hand copy into core/plugins.
 // The probe refuses to run if the cubes are not mounted, rather than proving nothing.
 
 import { existsSync } from "node:fs"
@@ -30,7 +30,16 @@ const score = makeScore()
 const port = await freePort()
 const data = scratchDataDir("crm")
 const api = client(port)
-const server = await startServer(port, { QWBE_DATA_DIR: data })
+// The scratch ledger has no record of any legacy cube on a fresh data dir: the boot
+// authorizes its own pre-ledger history, exactly like the throwaway bench in
+// tools/import.test.mjs. The full list, not a subset -- the pack declares three sources
+// (contacts, contracts, crm/accounts) and the kernel checkout's own example-plugin
+// declares two more (bookmarks, tags); one unattributable source refuses the boot.
+const LEGACY = {
+  QWBE_LEGACY_MIGRATIONS:
+    "contacts:crm-pack,contracts:crm-pack,crm/accounts:crm-pack,bookmarks:example-plugin,tags:example-plugin",
+}
+const server = await startServer(port, { QWBE_DATA_DIR: data, ...LEGACY })
 
 if (!server.alive) {
   dropScratch(data)
@@ -44,7 +53,7 @@ try {
 
   const cubes = await api.call("/settings/cubes", { headers: admin.headers })
   const names = (cubes.body ?? []).map((c) => c.name)
-  for (const want of ["crm", "crm/accounts", "crm/contacts", "crm/contracts"]) {
+  for (const want of ["crm", "crm/organizations", "crm/contacts", "crm/contracts"]) {
     if (!names.includes(want)) {
       console.error(`refused: cube "${want}" is not mounted — install crm-pack first (see header).`)
       process.exit(1)
@@ -89,7 +98,7 @@ try {
 
   const got = await api.call(`/contacts/${contact?.id}`, { headers: reader.headers })
   score.check(
-    "company stays free text on the contact (no account entity)",
+    "company stays free text on the contact (no organization entity folded in)",
     got.status === 200 && got.body?.company === "Ada SRL",
     `http=${got.status}`,
   )
@@ -154,21 +163,21 @@ try {
     `out=${JSON.stringify(out)}`,
   )
 
-  // ---- accounts (QWB-47): create / get / update, 403, 404, paging, sorting ----------------
-  const anonA = await api.call("/accounts")
-  score.check("accounts requires authentication (401)", anonA.status === 401, `http=${anonA.status}`)
+  // ---- organizations (QWB-47): create / get / update, 403, 404, paging, sorting ----------------
+  const anonA = await api.call("/organizations")
+  score.check("organizations requires authentication (401)", anonA.status === 401, `http=${anonA.status}`)
 
-  const forbiddenA = await api.call("/accounts", {
+  const forbiddenA = await api.call("/organizations", {
     method: "POST",
     headers: reader.headers,
     body: JSON.stringify({ name: "Refused Reader SRL" }),
   })
   score.check("reader cannot create an organization (403)", forbiddenA.status === 403, `http=${forbiddenA.status}`)
 
-  const missingA = await api.call("/accounts/acc_missing", { headers: admin.headers })
+  const missingA = await api.call("/organizations/acc_missing", { headers: admin.headers })
   score.check("missing organization is 404", missingA.status === 404, `http=${missingA.status}`)
 
-  const createdA = await api.call("/accounts", {
+  const createdA = await api.call("/organizations", {
     method: "POST",
     headers: admin.headers,
     body: JSON.stringify({
@@ -186,7 +195,7 @@ try {
     `http=${createdA.status} id=${org?.id}`,
   )
 
-  const updatedA = await api.call(`/accounts/${org?.id}`, {
+  const updatedA = await api.call(`/organizations/${org?.id}`, {
     method: "PATCH",
     headers: admin.headers,
     body: JSON.stringify({ billingCity: "Cluj", rating: "active" }),
@@ -197,91 +206,111 @@ try {
     `http=${updatedA.status}`,
   )
 
-  const pageA = await api.call("/accounts?limit=1&sortBy=name", { headers: reader.headers })
+  const pageA = await api.call("/organizations?limit=1&sortBy=name", { headers: reader.headers })
   score.check(
-    "accounts list pages and sorts",
+    "organizations list pages and sorts",
     pageA.status === 200 && pageA.body?.rows?.length === 1 && pageA.body?.total === 1 && pageA.body?.sortedBy === "name",
     `http=${pageA.status} sortedBy=${pageA.body?.sortedBy}`,
   )
 
-  // ---- the relation: accountId on the contact is the one truth -----------------------------
-  const withAccount = await api.call("/contacts", {
+  // Ticket 07: the list is the kernel's generic one, and the manifest's `searchable` fields
+  // are the filter contract. Two organizations, a filter on name, exactly one back.
+  const secondOrg = await api.call("/organizations", {
     method: "POST",
     headers: admin.headers,
-    body: JSON.stringify({ name: "Dan Pop", email: "dan@example.com", accountId: org?.id }),
+    body: JSON.stringify({ name: "Beta Constructions SRL", industry: "construction" }),
+  })
+  const filteredA = await api.call(`/organizations?name=${encodeURIComponent("Ada Industries SRL")}`, {
+    headers: reader.headers,
   })
   score.check(
-    "contact created with accountId pointing at an existing organization",
-    withAccount.status === 200 && withAccount.body?.accountId === org?.id,
-    `http=${withAccount.status} accountId=${withAccount.body?.accountId}`,
+    "filtering organizations by name returns exactly the matching one",
+    secondOrg.status === 200 &&
+      filteredA.status === 200 &&
+      filteredA.body?.total === 1 &&
+      filteredA.body?.rows?.length === 1 &&
+      filteredA.body?.rows?.[0]?.name === "Ada Industries SRL",
+    `http=${filteredA.status} total=${filteredA.body?.total}`,
   )
 
-  const withoutAccount = await api.call("/contacts", {
+  // ---- the relation: organizationId on the contact is the one truth -----------------------------
+  const withOrganization = await api.call("/contacts", {
+    method: "POST",
+    headers: admin.headers,
+    body: JSON.stringify({ name: "Dan Pop", email: "dan@example.com", organizationId: org?.id }),
+  })
+  score.check(
+    "contact created with organizationId pointing at an existing organization",
+    withOrganization.status === 200 && withOrganization.body?.organizationId === org?.id,
+    `http=${withOrganization.status} organizationId=${withOrganization.body?.organizationId}`,
+  )
+
+  const withoutOrganization = await api.call("/contacts", {
     method: "POST",
     headers: admin.headers,
     body: JSON.stringify({ name: "Maria Radu", email: "maria@example.com" }),
   })
   score.check(
-    "contact created without accountId comes back null",
-    withoutAccount.status === 200 && withoutAccount.body?.accountId === null,
-    `http=${withoutAccount.status} accountId=${withoutAccount.body?.accountId}`,
+    "contact created without organizationId comes back null",
+    withoutOrganization.status === 200 && withoutOrganization.body?.organizationId === null,
+    `http=${withoutOrganization.status} organizationId=${withoutOrganization.body?.organizationId}`,
   )
 
-  const orgContacts = await api.call(`/contacts?accountId=${org?.id}`, { headers: reader.headers })
+  const orgContacts = await api.call(`/contacts?organizationId=${org?.id}`, { headers: reader.headers })
   score.check(
-    "an organization's contacts are derived by filtering on accountId",
+    "an organization's contacts are derived by filtering on organizationId",
     orgContacts.status === 200 &&
       orgContacts.body?.total === 1 &&
       orgContacts.body?.rows?.[0]?.name === "Dan Pop" &&
-      orgContacts.body?.rows?.[0]?.accountId === org?.id,
+      orgContacts.body?.rows?.[0]?.organizationId === org?.id,
     `http=${orgContacts.status} total=${orgContacts.body?.total}`,
   )
 
-  const badAccount = await api.call("/contacts", {
+  const badOrganizationId = await api.call("/contacts", {
     method: "POST",
     headers: admin.headers,
-    body: JSON.stringify({ name: "Bad Link", email: "bad@example.com", accountId: "   " }),
+    body: JSON.stringify({ name: "Bad Link", email: "bad@example.com", organizationId: "   " }),
   })
   score.check(
-    "a blank accountId is refused at the schema edge (400)",
-    badAccount.status === 400,
-    `http=${badAccount.status}`,
+    "a blank organizationId is refused at the schema edge (400)",
+    badOrganizationId.status === 400,
+    `http=${badOrganizationId.status}`,
   )
 
-  // A well-formed but NONEXISTENT accountId. Today the kernel offers cubes no cross-cube
+  // A well-formed but NONEXISTENT organizationId. Today the kernel offers cubes no cross-cube
   // read, so the refusal is not implementable yet: the create SUCCEEDS and this assertion
   // pins today's real behaviour. This is the assertion to FLIP to 400 once the
   // kernel-enforced relation lands (shepherd's separate change in the qwbe repo).
-  const ghostAccount = await api.call("/contacts", {
+  const ghostOrganizationId = await api.call("/contacts", {
     method: "POST",
     headers: admin.headers,
-    body: JSON.stringify({ name: "Ghost Link", email: "ghost@example.com", accountId: "acc-doesnotexist" }),
+    body: JSON.stringify({ name: "Ghost Link", email: "ghost@example.com", organizationId: "org-doesnotexist" }),
   })
   score.check(
-    "a nonexistent accountId is still accepted (kernel relation pending) — FLIP to 400 when it lands",
-    ghostAccount.status === 200 && ghostAccount.body?.accountId === "acc-doesnotexist",
-    `http=${ghostAccount.status}`,
+    "a nonexistent organizationId is still accepted (kernel relation pending) — FLIP to 400 when it lands",
+    ghostOrganizationId.status === 200 && ghostOrganizationId.body?.organizationId === "org-doesnotexist",
+    `http=${ghostOrganizationId.status}`,
   )
 
   // The move: PATCH /contacts/:id changes the one truth, including unlinking.
   const movedContact = await api.call(`/contacts/${contact?.id}`, {
     method: "PATCH",
     headers: admin.headers,
-    body: JSON.stringify({ accountId: org?.id }),
+    body: JSON.stringify({ organizationId: org?.id }),
   })
   score.check(
     "PATCH /contacts/:id moves a contact to another organization",
-    movedContact.status === 200 && movedContact.body?.accountId === org?.id,
-    `http=${movedContact.status} accountId=${movedContact.body?.accountId}`,
+    movedContact.status === 200 && movedContact.body?.organizationId === org?.id,
+    `http=${movedContact.status} organizationId=${movedContact.body?.organizationId}`,
   )
   const unlinkedContact = await api.call(`/contacts/${contact?.id}`, {
     method: "PATCH",
     headers: admin.headers,
-    body: JSON.stringify({ accountId: null }),
+    body: JSON.stringify({ organizationId: null }),
   })
   score.check(
-    "PATCH /contacts/:id unlinks a contact (accountId null)",
-    unlinkedContact.status === 200 && unlinkedContact.body?.accountId === null,
+    "PATCH /contacts/:id unlinks a contact (organizationId null)",
+    unlinkedContact.status === 200 && unlinkedContact.body?.organizationId === null,
     `http=${unlinkedContact.status}`,
   )
 
@@ -291,13 +320,14 @@ try {
   for (const [only, route] of [
     ["crm/contacts", "/contacts"],
     ["crm/contracts", "/contracts"],
-    ["crm/accounts", "/accounts"],
+    ["crm/organizations", "/organizations"],
   ]) {
     const p2 = await freePort()
     const d2 = scratchDataDir(`crm-only-${only.replace("/", "-")}`)
     const s2 = await startServer(p2, {
       QWBE_DATA_DIR: d2,
       QWBE_MOUNTED: `auth,account,settings,cli,crm,${only}`,
+      ...LEGACY,
     })
     if (!s2.alive) {
       score.check(`${only} boots without the other cube`, false, s2.output.split("\n").slice(-3).join(" "))

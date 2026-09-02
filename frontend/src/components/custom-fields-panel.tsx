@@ -1,26 +1,34 @@
 "use client"
 
-// The custom-field definitions panel (QWB-52). Reachable from every entity
-// list: lists the cube's current custom fields, and lets an ADMINISTRATOR add
-// one (name, type, required, options for a select) or delete one -- no code,
-// no redeploy. Definitions are served by the customfields pack through the
-// same server-side proxy as everything else; the token never leaves the
-// httpOnly cookie.
+// The custom-field management surface (QWB-52, moved to Settings by QWB-54
+// F2): lists the selected cube's current custom fields, and lets an
+// ADMINISTRATOR add one (name, type, required, options for a select) or delete
+// one -- no code, no redeploy. Definitions are served by the customfields cube
+// through the same server-side proxy as everything else; the token never
+// leaves the httpOnly cookie.
 //
 // The panel is visible ONLY to a user whose effective permissions include
-// customfields:write (qwbe's /auth/me publishes them). A user without it gets
-// no panel at all, and a direct call to the definition endpoints answers 403
-// from qwbe -- the message shown here is qwbe's own.
+// customfields:write (qwbe's /auth/me publishes them); anyone else gets the
+// message, not a silent blank section. A direct call to the definition
+// endpoints answers 403 from qwbe -- the message shown here is qwbe's own.
 
 import { useCallback, useEffect, useState } from "react"
 
 import {
+  apiFetch,
   canDefineFields,
   errorBody,
   errorMessage,
   httpPrefixOf,
   type Row,
 } from "@/lib/cube"
+import {
+  readPrefs,
+  writePrefs,
+  withDefault,
+  withHidden,
+  type CustomFieldPrefs,
+} from "@/lib/field-prefs"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -57,7 +65,7 @@ const FIELD_TYPES_FALLBACK = ["text", "number", "date", "bool", "select"]
 // One fetch, one parse, shared by every panel on the page.
 let openApiTypes: Promise<string[]> | null = null
 const acceptedFieldTypes = (): Promise<string[]> => {
-  openApiTypes ??= fetch("/api/qwbe/openapi.json")
+  openApiTypes ??= apiFetch("/api/qwbe/openapi.json")
     .then(async (r) => {
       if (!r.ok) throw new Error(`openapi request failed: ${r.status}`)
       const spec = (await r.json()) as {
@@ -81,7 +89,7 @@ const acceptedFieldTypes = (): Promise<string[]> => {
 // own /auth/me per panel.
 let meCheck: Promise<{ permissions?: string[] } | null> | null = null
 const myPermissions = (): Promise<{ permissions?: string[] } | null> => {
-  meCheck ??= fetch("/api/qwbe/auth/me")
+  meCheck ??= apiFetch("/api/qwbe/auth/me")
     .then(async (r) => (r.ok ? ((await r.json()) as { permissions?: string[] }) : null))
     .catch(() => null)
   return meCheck
@@ -102,32 +110,36 @@ export type CustomFieldDef = {
 
 export function CustomFieldsPanel({
   cube,
-  onChanged,
-  rendered = true,
 }: {
   // The full cube name the definitions target, e.g. "crm/contacts".
   cube: string
-  // Called after a definition is added or deleted, so the caller can re-read
-  // the cube's metadata and the new column appears (or the old one disappears)
-  // without a page reload.
-  onChanged: () => void
-  // False for an embedded child list: the component then renders nothing, so
-  // a detail page shows exactly one panel.
-  rendered?: boolean
 }) {
   const [allowed, setAllowed] = useState<boolean | null>(null)
   const [fieldTypes, setFieldTypes] = useState<string[] | null>(null)
-  const [open, setOpen] = useState(false)
   const [defs, setDefs] = useState<CustomFieldDef[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // The per-browser UI layer (lib/field-prefs): which fields this browser
+  // hides from the lists and what a create form prefills. NOT server state --
+  // the definition itself is what the API owns; see field-prefs.ts for why.
+  // Read in an effect, so the server render and the first client render agree
+  // (no hydration mismatch) and a cube switch re-reads its own document.
+  const [prefs, setPrefs] = useState<CustomFieldPrefs>({ hidden: [], defaults: {} })
+  useEffect(() => {
+    // The deferred read is the codebase's hydration pattern (the hydrated
+    // gate below uses the same timer): localStorage exists only on the
+    // client, and the first render must agree with the server's.
+    const t = setTimeout(() => setPrefs(readPrefs(cube)), 0)
+    return () => clearTimeout(t)
+  }, [cube])
+  const changePrefs = (next: CustomFieldPrefs) => {
+    writePrefs(cube, next)
+    setPrefs(next)
+  }
 
   // Permission check first: without customfields:write this component renders
-  // nothing, whatever else it would have fetched.
+  // the message instead of management UI.
   useEffect(() => {
     let alive = true
-    // An embedded (rendered=false) panel fetches nothing at all; the render
-    // guard below already shows nothing for it.
-    if (!rendered) return undefined
     myPermissions()
       .then((me) => {
         if (alive) setAllowed(canDefineFields(me?.permissions ?? []))
@@ -138,26 +150,25 @@ export function CustomFieldsPanel({
     return () => {
       alive = false
     }
-  }, [rendered])
+  }, [])
 
   // The accepted types come from the pack's own published schema, once.
   useEffect(() => {
     let alive = true
-    if (!rendered) return
     acceptedFieldTypes().then((types) => {
       if (alive) setFieldTypes(types)
     })
     return () => {
       alive = false
     }
-  }, [rendered])
+  }, [])
 
   const loadDefs = useCallback(() => {
     let alive = true
     const stop = () => {
       alive = false
     }
-    fetch(`/api/qwbe/customfields?cube=${encodeURIComponent(cube)}&limit=200`)
+    apiFetch(`/api/qwbe/customfields?cube=${encodeURIComponent(cube)}&limit=200`)
       .then(async (r) => {
         if (!r.ok) throw new Error(errorMessage(await errorBody(r)))
         return (await r.json()) as { rows?: CustomFieldDef[] }
@@ -174,25 +185,27 @@ export function CustomFieldsPanel({
 
   // The cleanup is returned for real: an unmount while the list is in flight
   // must not set state on a dead component.
-  useEffect(() => (open ? loadDefs() : undefined), [open, loadDefs])
+  useEffect(() => loadDefs(), [loadDefs])
 
-  if (!rendered || allowed === null || !allowed) return null
+  if (allowed === null) return null
+  if (!allowed)
+    return (
+      <p className="text-sm text-muted-foreground">
+        Custom fields are managed with the customfields:write permission, which
+        this account does not have.
+      </p>
+    )
 
   return (
-    <div className="flex flex-col gap-2">
-      <Button variant="outline" size="sm" className="self-start" onClick={() => setOpen((o) => !o)}>
-        {open ? "Hide custom fields" : "Custom fields"}
-      </Button>
-      {open && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Custom fields</CardTitle>
-            <CardDescription>
-              Fields defined at runtime for this entity. They appear in the
-              list, the detail page and inline edit as soon as they are defined.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-4">
+    <Card>
+      <CardHeader>
+        <CardTitle>Custom fields</CardTitle>
+        <CardDescription>
+          Fields defined at runtime for this entity. They appear in the list,
+          the detail page and inline edit as soon as they are defined.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
             {error && (
               <p role="alert" className="text-sm text-destructive">
                 {error}
@@ -204,6 +217,8 @@ export function CustomFieldsPanel({
                   <TableHead>Name</TableHead>
                   <TableHead>Type</TableHead>
                   <TableHead>Required</TableHead>
+                  <TableHead>Hidden on lists</TableHead>
+                  <TableHead>Default value</TableHead>
                   <TableHead>Options</TableHead>
                   <TableHead>
                     <span className="sr-only">Actions</span>
@@ -216,6 +231,25 @@ export function CustomFieldsPanel({
                     <TableCell>{d.label || d.name}</TableCell>
                     <TableCell>{d.fieldType}</TableCell>
                     <TableCell>{d.required ? "yes" : "no"}</TableCell>
+                    <TableCell>
+                      {/* hide != delete (F2): the definition and every stored
+                          value stay; this browser just drops the field from
+                          the list columns. */}
+                      <Checkbox
+                        aria-label={`Hide ${d.label || d.name} on lists`}
+                        checked={prefs.hidden.includes(d.name)}
+                        onCheckedChange={(checked) =>
+                          changePrefs(withHidden(prefs, d.name, checked === true))
+                        }
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <DefaultValueEditor
+                        def={d}
+                        value={prefs.defaults[d.name] ?? ""}
+                        onChange={(v) => changePrefs(withDefault(prefs, d.name, v))}
+                      />
+                    </TableCell>
                     <TableCell>{d.options.length > 0 ? d.options.join(", ") : "—"}</TableCell>
                     <TableCell>
                       <DeleteButton
@@ -226,7 +260,6 @@ export function CustomFieldsPanel({
                         onDeleted={() => {
                           setError(null)
                           loadDefs()
-                          onChanged()
                         }}
                         onError={setError}
                       />
@@ -235,7 +268,7 @@ export function CustomFieldsPanel({
                 ))}
                 {defs !== null && defs.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={5} className="text-muted-foreground">
+                    <TableCell colSpan={7} className="text-muted-foreground">
                       No custom fields defined.
                     </TableCell>
                   </TableRow>
@@ -248,14 +281,11 @@ export function CustomFieldsPanel({
               onDefined={() => {
                 setError(null)
                 loadDefs()
-                onChanged()
               }}
               onError={setError}
             />
           </CardContent>
         </Card>
-      )}
-    </div>
   )
 }
 
@@ -283,7 +313,7 @@ function DeleteButton({
   const beginConfirm = async () => {
     setBusy(true)
     try {
-      const r = await fetch(`/api/qwbe/${httpPrefixOf(cube)}?limit=200`)
+      const r = await apiFetch(`/api/qwbe/${httpPrefixOf(cube)}?limit=200`)
       let carrying = 0
       if (r.ok) {
         const p = (await r.json()) as { rows?: Row[] }
@@ -312,7 +342,7 @@ function DeleteButton({
           onClick={async () => {
             setBusy(true)
             try {
-              const r = await fetch(`/api/qwbe/customfields/${encodeURIComponent(id)}`, {
+              const r = await apiFetch(`/api/qwbe/customfields/${encodeURIComponent(id)}`, {
                 method: "DELETE",
               })
               if (!r.ok) {
@@ -354,6 +384,58 @@ function DeleteButton({
   )
 }
 
+// The default-value editor for one definition, shaped by the field's own type:
+// a choice for `select` (its options) and `bool` (true/false), a text input for
+// everything else. "No default" is the empty value, which removes the
+// preference entirely. The stored string is exactly what a form field holds;
+// the create form applies it through the same coerce() a typed value goes
+// through, so the kernel's own validation stays the only validator.
+function DefaultValueEditor({
+  def,
+  value,
+  onChange,
+}: {
+  def: CustomFieldDef
+  value: string
+  onChange: (value: string) => void
+}) {
+  // Radix forbids an empty-string SelectItem value; the empty choice rides on
+  // a sentinel and is translated back to "" (no default) on change.
+  const NONE = "__none__"
+  const choices =
+    def.fieldType === "select"
+      ? def.options
+      : def.fieldType === "bool"
+        ? ["true", "false"]
+        : null
+  if (!choices) {
+    return (
+      <Input
+        className="w-40"
+        aria-label={`Default for ${def.label || def.name}`}
+        value={value}
+        placeholder="no default"
+        onChange={(e) => onChange(e.target.value)}
+      />
+    )
+  }
+  return (
+    <Select value={value === "" ? NONE : value} onValueChange={(v) => onChange(v === NONE ? "" : v)}>
+      <SelectTrigger className="w-40" aria-label={`Default for ${def.label || def.name}`}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value={NONE}>No default</SelectItem>
+        {choices.map((c) => (
+          <SelectItem key={c} value={c}>
+            {c}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  )
+}
+
 // The add form. Everything it sends is what the customfields pack's create
 // schema accepts; a refusal (bad name, select without options, duplicate,
 // no permission) is answered with qwbe's own message.
@@ -382,7 +464,7 @@ function DefineForm({
         e.preventDefault()
         setBusy(true)
         try {
-          const r = await fetch("/api/qwbe/customfields", {
+          const r = await apiFetch("/api/qwbe/customfields", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({

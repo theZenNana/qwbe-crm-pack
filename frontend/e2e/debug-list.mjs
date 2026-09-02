@@ -1,3 +1,4 @@
+// @ts-check
 // Diagnostic for the list scenario: seeds through the API, then shows what the /accounts page
 // actually renders and what the proxy returns, so a missing row can be traced to the API, the
 // proxy or the page. Not part of `npm run e2e`.

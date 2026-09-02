@@ -16,8 +16,9 @@ import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 
 const ENTRIES = [
-  { href: "/accounts", label: "Organizations" },
+  { href: "/organizations", label: "Organizations" },
   { href: "/contacts", label: "Contacts" },
+  { href: "/settings", label: "Settings" },
 ] as const
 
 // Routes reachable without a session: a bar offering Organizations and "Log out" to someone who
@@ -32,7 +33,7 @@ export function AppNav() {
       <div className="mx-auto flex w-full max-w-7xl items-center gap-2 p-3">
         <span className="mr-2 font-semibold">CRM</span>
         {ENTRIES.map((entry) => {
-          // A detail page (/accounts/<id>) keeps its section marked as current.
+          // A detail page (/organizations/<id>) keeps its section marked as current.
           const current = pathname === entry.href || pathname.startsWith(`${entry.href}/`)
           return (
             <Button
@@ -48,7 +49,7 @@ export function AppNav() {
         })}
         <Separator orientation="vertical" className="mx-2 h-6" />
         <Button asChild variant="ghost" size="sm">
-          <Link href="/me">Account</Link>
+          <Link href="/me">Profile</Link>
         </Button>
         <form action="/api/logout" method="post" className="ml-auto">
           <Button type="submit" variant="outline" size="sm">

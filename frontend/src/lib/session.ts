@@ -5,8 +5,33 @@
 
 // Path "/" so the browser also sends the cookie to pages (for example /me),
 // not only to the /api route handlers that read it.
-export const SESSION_COOKIE = "qwbe_session"
 export const COOKIE_PATH = "/"
+
+// The host this request was addressed to, proxies included.
+export const hostOf = (headers: { get(name: string): string | null }): string | null =>
+  headers.get("x-forwarded-host") ?? headers.get("host")
+
+// One cookie name per frontend instance, taken from the host of the request
+// being served.
+//
+// Browsers do NOT scope cookies by port, so every frontend on localhost shares
+// a single cookie jar: with one fixed name, a second stack's login overwrites
+// the first stack's session and its logout deletes it outright (measured
+// 2026-08-31 -- an e2e run on a throwaway port threw the owner out of his own
+// :4510 session within seconds).
+//
+// The port that distinguishes the jars is the one in the browser's address
+// bar, i.e. the frontend's own -- not the kernel's: two frontends on localhost
+// talking to host1:4500 and host2:4500 would collide again if the name came
+// from the API URL. It is read from the request, so nothing in this path
+// depends on build-time environment.
+//
+// No port (a hostname behind 80/443) keeps the plain name: one deployment per
+// host, nothing to collide with.
+export const sessionCookieName = (host: string | null | undefined): string => {
+  const port = host?.match(/:(\d+)$/)?.[1]
+  return port ? `qwbe_session_${port}` : "qwbe_session"
+}
 
 export type SessionCookieOptions = {
   name: string
@@ -22,6 +47,7 @@ export function sessionCookie(
   token: string,
   expiresAt: string,
   production = false,
+  host: string | null = null,
 ): SessionCookieOptions {
   // loginToQwbe already rejects a past or unparseable expiresAt; this is a
   // last guard so an invalid date never reaches a Set-Cookie header.
@@ -30,7 +56,7 @@ export function sessionCookie(
     throw new Error(`invalid session expiry: ${expiresAt}`)
   }
   return {
-    name: SESSION_COOKIE,
+    name: sessionCookieName(host),
     value: token,
     httpOnly: true,
     sameSite: "lax",
@@ -42,9 +68,12 @@ export function sessionCookie(
 
 // Cookie options that clear an existing session cookie on the next response:
 // same name and path, empty value, already expired.
-export function expireSessionCookie(production = false): SessionCookieOptions {
+export function expireSessionCookie(
+  production = false,
+  host: string | null = null,
+): SessionCookieOptions {
   return {
-    name: SESSION_COOKIE,
+    name: sessionCookieName(host),
     value: "",
     httpOnly: true,
     sameSite: "lax",
