@@ -22,6 +22,7 @@ const qwbeRepo = resolve(process.env.QWBE_REPO ?? join(repo, "..", "..", "qwbe")
 const kernel = (file) => import(pathToFileURL(join(qwbeRepo, "core", "src", file)))
 const { shelfDrift } = await kernel("store-drift.ts")
 const { MANIFEST, PROVENANCE, packageSourceFingerprint } = await kernel("package-source.ts")
+const STRIPPED = [MANIFEST, PROVENANCE] // bookkeeping the destination strips at install
 
 let red = 0
 const verdict = (name, ok, detail) => {
@@ -51,7 +52,7 @@ if (!existsSync(installed)) {
   verdict("plugins/crm-pack", true, "not installed in this checkout")
 } else {
   const fresh =
-    packageSourceFingerprint(installed) === packageSourceFingerprint(repo, [MANIFEST, PROVENANCE])
+    packageSourceFingerprint(installed, STRIPPED) === packageSourceFingerprint(repo, STRIPPED)
   verdict("plugins/crm-pack", fresh, fresh ? "matches the repo" : "behind the repo - reinstall from this directory")
 }
 
