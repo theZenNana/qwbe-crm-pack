@@ -26,6 +26,7 @@
 // this module. Structure only is ever printed: schema, table, index name, created/exists.
 
 import pg from "pg"
+import { dbUrl } from "./db-url.mjs"
 
 /** The cube's schema name, by the kernel's own rule (core/src/pg/setup.ts schemaName). */
 export const schemaOf = (cube) => cube.replace(/\//g, "--")
@@ -67,20 +68,6 @@ export const IMPORTABLE = [
   { cube: "crm/organizations", schema: "crm--organizations", table: "organizations" },
   { cube: "crm/contacts", schema: "crm--contacts", table: "contacts" },
 ]
-
-/** Connection URL from the environment; null when neither spelling is set. Never a default. */
-export const dbUrl = () => {
-  if (process.env.QWBE_DATABASE_URL) return process.env.QWBE_DATABASE_URL
-  if (process.env.QWBE_PG_PASSWORD) {
-    const u = new URL("postgres://localhost/postgres")
-    u.hostname = process.env.QWBE_PG_HOST ?? "localhost"
-    u.port = process.env.QWBE_PG_PORT ?? "5433"
-    u.username = process.env.QWBE_PG_USER ?? "postgres"
-    u.password = process.env.QWBE_PG_PASSWORD
-    return u.toString()
-  }
-  return null
-}
 
 const isMain = process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href
 if (isMain) {

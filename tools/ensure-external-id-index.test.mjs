@@ -13,27 +13,18 @@ import assert from "node:assert/strict"
 import { after, before, describe, it } from "node:test"
 import pg from "pg"
 import { ensureExternalIdIndex, externalIdIndexSql, indexName, schemaOf } from "./ensure-external-id-index.mjs"
-
-const url = () => {
-  if (!process.env.QWBE_PG_PASSWORD) throw new Error("set QWBE_PG_PASSWORD in the environment (no password default)")
-  const u = new URL("postgres://localhost/postgres")
-  u.hostname = process.env.QWBE_PG_HOST ?? "localhost"
-  u.port = process.env.QWBE_PG_PORT ?? "5433"
-  u.username = process.env.QWBE_PG_USER ?? "postgres"
-  u.password = process.env.QWBE_PG_PASSWORD
-  return u
-}
+import { requireDbUrl } from "./db-url.mjs"
 
 const SCHEMA = "extidx_test"
 const TABLE = "rows"
 
-const admin = new pg.Pool({ connectionString: url().toString(), max: 1 })
+const admin = new pg.Pool({ connectionString: requireDbUrl().toString(), max: 1 })
 let pool
 const dbName = `qwbe_extidx_${Date.now().toString(36)}`
 
 before(async () => {
   await admin.query(`CREATE DATABASE "${dbName}"`)
-  const dbUrl = new URL(url().toString())
+  const dbUrl = requireDbUrl()
   dbUrl.pathname = `/${dbName}`
   pool = new pg.Pool({ connectionString: dbUrl.toString(), max: 1 })
   // The schema and table, as the kernel's pg store creates them (core/src/pg/setup.ts) --

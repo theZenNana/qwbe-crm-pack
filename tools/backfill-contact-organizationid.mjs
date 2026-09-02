@@ -30,6 +30,7 @@
 // With neither variable set the tool refuses to guess and exits 2.
 
 import pg from "pg"
+import { dbUrl } from "./db-url.mjs"
 
 /** The one statement, for any schema/table/key (tests use a scratch pair). */
 export const fillKeySql = (schema, table, key) =>
@@ -62,22 +63,9 @@ const TARGETS = [
   { schema: "crm--organizations", table: "organizations", key: "externalId" },
 ]
 
-const connectionUrl = () => {
-  if (process.env.QWBE_DATABASE_URL) return process.env.QWBE_DATABASE_URL
-  if (process.env.QWBE_PG_PASSWORD) {
-    const u = new URL("postgres://localhost/postgres")
-    u.hostname = process.env.QWBE_PG_HOST ?? "localhost"
-    u.port = process.env.QWBE_PG_PORT ?? "5433"
-    u.username = process.env.QWBE_PG_USER ?? "postgres"
-    u.password = process.env.QWBE_PG_PASSWORD
-    return u.toString()
-  }
-  return null
-}
-
 const isMain = process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href
 if (isMain) {
-  const url = connectionUrl()
+  const url = dbUrl()
   if (!url) {
     console.error("refusing to guess the database: set QWBE_DATABASE_URL, or QWBE_PG_PASSWORD (plus optional QWBE_PG_HOST/PORT/USER)")
     process.exit(2)

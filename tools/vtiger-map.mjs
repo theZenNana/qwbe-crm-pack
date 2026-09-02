@@ -36,7 +36,8 @@
 import { createReadStream, readFileSync } from "node:fs"
 import { createInterface } from "node:readline"
 import pg from "pg"
-import { dbUrl, ensureExternalIdIndex, indexName, schemaOf } from "./ensure-external-id-index.mjs"
+import { dbUrl } from "./db-url.mjs"
+import { ensureExternalIdIndex, indexName, schemaOf } from "./ensure-external-id-index.mjs"
 import { externalKey, mapRow } from "./vtiger-map-lib.mjs"
 
 const argv = process.argv.slice(2)
