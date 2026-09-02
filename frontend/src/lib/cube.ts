@@ -295,13 +295,6 @@ export function titleOf(meta: CubeMetadata, row: Row): string {
 // to the raw id when either request fails -- a cell never blocks on it.
 const metaCache = new Map<string, CubeMetadata>()
 
-// A definition change re-publishes the target cube's metadata; a relation
-// resolved before the change must not keep serving the stale field list for
-// the rest of the session. The panel's onChanged path calls this.
-export function clearRelationMetaCache(): void {
-  metaCache.clear()
-}
-
 // Fetches (and session-caches) a cube's published metadata, or null when the
 // request fails. Shared by every relation surface: batch cell resolution and
 // the typeahead both need the title field, and each cube's metadata is fetched
@@ -320,23 +313,6 @@ export async function relationMeta(
     return meta
   } catch {
     return null
-  }
-}
-
-export async function resolveRelationTitle(
-  target: string,
-  id: string,
-  doFetch: typeof fetch = apiFetch,
-): Promise<string> {
-  try {
-    const meta = await relationMeta(target, doFetch)
-    if (!meta) return id
-    const r = await doFetch(cubeApiPath(target, `/${id}`))
-    if (!r.ok) return id
-    const row = (await r.json()) as Row
-    return titleOf(meta, row)
-  } catch {
-    return id
   }
 }
 

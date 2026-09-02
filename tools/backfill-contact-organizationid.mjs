@@ -57,11 +57,6 @@ export const renameAccountKeysSql = (schema, table) =>
 export const renameOrganizationKeys = (pool, schema = "crm--organizations", table = "organizations") =>
   pool.query(renameAccountKeysSql(schema, table)).then((r) => r.rowCount ?? 0)
 
-export const backfillOrganizationId = (pool, schema = "crm--contacts", table = "contacts") =>
-  backfillMissingKey(pool, schema, table, "organizationId")
-
-export const backfillExternalId = (pool, schema, table) => backfillMissingKey(pool, schema, table, "externalId")
-
 const TARGETS = [
   { schema: "crm--contacts", table: "contacts", key: "organizationId" },
   { schema: "crm--contacts", table: "contacts", key: "externalId" },

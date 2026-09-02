@@ -32,7 +32,7 @@ export const prefsKey = (cube: string): string => `crm.customFields.${cube}`
 // every caller in the app omits it and reads the browser's localStorage.
 export function readPrefs(cube: string, storage?: Storage): CustomFieldPrefs {
   const raw = (storage ?? globalThis.localStorage)?.getItem(prefsKey(cube))
-  if (!raw) return { hidden: [], defaults: {} }
+  if (!raw) return EMPTY_PREFS
   try {
     const parsed = JSON.parse(raw) as Partial<CustomFieldPrefs>
     const hidden = Array.isArray(parsed.hidden)
@@ -46,7 +46,7 @@ export function readPrefs(cube: string, storage?: Storage): CustomFieldPrefs {
     }
     return { hidden, defaults }
   } catch {
-    return { hidden: [], defaults: {} }
+    return EMPTY_PREFS
   }
 }
 

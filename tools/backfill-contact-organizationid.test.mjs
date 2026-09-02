@@ -14,7 +14,7 @@
 import assert from "node:assert/strict"
 import { after, before, describe, it } from "node:test"
 import pg from "pg"
-import { backfillExternalId, backfillOrganizationId, renameOrganizationKeys } from "./backfill-contact-organizationid.mjs"
+import { backfillMissingKey, renameOrganizationKeys } from "./backfill-contact-organizationid.mjs"
 
 const url = () => {
   if (!process.env.QWBE_PG_PASSWORD) throw new Error("set QWBE_PG_PASSWORD in the environment (no password default)")
@@ -74,7 +74,7 @@ const bodyOf = async (id) => {
 
 describe("the one-shot organizationId backfill", () => {
   it("fills the key with null only where it is missing", async () => {
-    const n = await backfillOrganizationId(pool, SCHEMA, TABLE)
+    const n = await backfillMissingKey(pool, SCHEMA, TABLE, "organizationId")
     assert.equal(n, 2) // old and ext lacked the key
     assert.deepEqual(await bodyOf("old"), { id: "old", type: "Contact", name: "Old Row", organizationId: null })
     assert.deepEqual(await bodyOf("null"), { id: "null", type: "Contact", name: "Null Row", organizationId: null })
@@ -82,7 +82,7 @@ describe("the one-shot organizationId backfill", () => {
   })
 
   it("is idempotent: a second run reports zero and changes nothing", async () => {
-    const n = await backfillOrganizationId(pool, SCHEMA, TABLE)
+    const n = await backfillMissingKey(pool, SCHEMA, TABLE, "organizationId")
     assert.equal(n, 0)
     assert.equal((await bodyOf("old")).organizationId, null)
     assert.equal((await bodyOf("linked")).organizationId, "org_1")
@@ -91,14 +91,14 @@ describe("the one-shot organizationId backfill", () => {
 
 describe("the one-shot externalId backfill (QWB-54, ticket 13)", () => {
   it("gives every row the key, null where no source system put one there", async () => {
-    const n = await backfillExternalId(pool, SCHEMA, TABLE)
+    const n = await backfillMissingKey(pool, SCHEMA, TABLE, "externalId")
     assert.equal(n, 3) // old, null, linked lacked the key; 'ext' already carries one
     assert.equal((await bodyOf("old")).externalId, null)
     assert.equal((await bodyOf("ext")).externalId, "vtiger:55")
   })
 
   it("is idempotent: a second run reports zero and changes nothing", async () => {
-    assert.equal(await backfillExternalId(pool, SCHEMA, TABLE), 0)
+    assert.equal(await backfillMissingKey(pool, SCHEMA, TABLE, "externalId"), 0)
     assert.equal((await bodyOf("ext")).externalId, "vtiger:55")
   })
 })

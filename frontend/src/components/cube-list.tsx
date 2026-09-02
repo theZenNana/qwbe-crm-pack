@@ -191,16 +191,11 @@ export function CubeList({
   // Every relation value on the current page, deduplicated. One ids batch per
   // distinct target cube resolves them all (useRelationTitles); the old list
   // fetched each cell's row separately -- 25 round-trips on a 25-row page.
-  // metaVersion is the bust: a definition change may republish the target's
-  // metadata (its title field), so titles are re-resolved once.
   const relationRefs = useMemo(
     () => (page ? relationRefsOf(page.rows, columns.map((c) => c.field)) : []),
     [page, columns],
   )
-  // Definitions are managed in Settings (QWB-54, F2), never on a list, so a
-  // list observes no definition change during its life: the bust stays 0 and
-  // navigating here re-mounts the list, which re-reads the metadata anyway.
-  const resolveTitle = useRelationTitles(relationRefs, 0)
+  const resolveTitle = useRelationTitles(relationRefs)
 
   if (metaError) return <p role="alert">metadata unavailable: {metaError}</p>
   if (!meta) return <Skeleton className="h-64 w-full" />

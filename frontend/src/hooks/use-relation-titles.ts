@@ -12,10 +12,6 @@
 // not return, deleted between the list and the batch) resolves to null and
 // the cell falls back to the raw id -- the same fallback the old per-cell
 // fetch had -- without a retry loop.
-//
-// `bust` invalidates the whole cache: a custom-field definition change
-// re-publishes the target cube's metadata (the title field may change), so
-// the caller passes its metadata version and every title is re-resolved.
 
 import { useCallback, useEffect, useReducer, useRef } from "react"
 
@@ -25,7 +21,6 @@ import type { PageOf, Row } from "@/lib/cube"
 
 export function useRelationTitles(
   refs: ReadonlyArray<RelationRef>,
-  bust: number,
 ): (target: string, id: string) => string | null {
   // target -> id -> title. The map is the source of truth and lives in a ref:
   // merging a response must not race the effect that reads it, and the
@@ -35,21 +30,9 @@ export function useRelationTitles(
   // `target|id` keys currently being fetched. Shared across effect runs so a
   // re-render between two page loads does not double-fetch an id.
   const inFlight = useRef<Set<string>>(new Set())
-  const lastBust = useRef(bust)
   const [, bump] = useReducer((n: number) => n + 1, 0)
 
   useEffect(() => {
-    const bustChanged = lastBust.current !== bust
-    lastBust.current = bust
-    if (bustChanged) {
-      // Titles re-resolve from scratch; no synchronous render bump is needed
-      // -- the async merges below re-render as they land. Cells briefly show
-      // raw ids, the same flash the old per-cell fetch gave on a reload.
-      cache.current = new Map()
-      failed.current = new Set()
-      inFlight.current = new Set()
-    }
-
     let alive = true
     // Released on cleanup: StrictMode's double effect would otherwise leave
     // the first run's keys claimed forever while its response was discarded.
@@ -99,7 +82,7 @@ export function useRelationTitles(
       alive = false
       for (const key of claimed) inFlight.current.delete(key)
     }
-  }, [refs, bust])
+  }, [refs])
 
   const resolve = useCallback(
     (target: string, id: string) => cache.current.get(target)?.get(id) ?? null,

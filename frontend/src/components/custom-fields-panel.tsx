@@ -23,6 +23,7 @@ import {
   type Row,
 } from "@/lib/cube"
 import {
+  EMPTY_PREFS,
   readPrefs,
   writePrefs,
   withDefault,
@@ -123,7 +124,7 @@ export function CustomFieldsPanel({
   // the definition itself is what the API owns; see field-prefs.ts for why.
   // Read in an effect, so the server render and the first client render agree
   // (no hydration mismatch) and a cube switch re-reads its own document.
-  const [prefs, setPrefs] = useState<CustomFieldPrefs>({ hidden: [], defaults: {} })
+  const [prefs, setPrefs] = useState<CustomFieldPrefs>(EMPTY_PREFS)
   useEffect(() => {
     // The deferred read is the codebase's hydration pattern (the hydrated
     // gate below uses the same timer): localStorage exists only on the

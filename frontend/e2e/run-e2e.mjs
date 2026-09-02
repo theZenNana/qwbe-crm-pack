@@ -137,13 +137,7 @@ cpSync(CONFIG.crmPack, join(CONFIG.workDir, "core", "plugins", "crm-pack"), {
   recursive: true,
   filter: (src) => !src.includes(`${CONFIG.crmPack}/node_modules/.cache`),
 })
-// Same treatment for the customfields pack (QWB-52): a separate repository,
-// installed the same way, its qwbe-core symlink repointed at THIS copy.
-cpSync(CONFIG.customFieldsPack, join(CONFIG.workDir, "core", "plugins", "customfields-pack"), {
-  recursive: true,
-  filter: (src) => !src.includes(`${CONFIG.customFieldsPack}/node_modules/.cache`),
-})
-for (const packDir of ["crm-pack", "customfields-pack"]) {
+for (const packDir of ["crm-pack"]) {
   const coreLink = join(CONFIG.workDir, "core", "plugins", packDir, "node_modules", "qwbe-core")
   if (existsSync(coreLink)) {
     rmSync(coreLink)
@@ -183,7 +177,7 @@ const packState = (dir) => {
 }
 const packLine =
   "packs from the working tree (uncommitted edits INCLUDED): " +
-  `crm-pack ${packState(CONFIG.crmPack)}, customfields-pack ${packState(CONFIG.customFieldsPack)}`
+  `crm-pack ${packState(CONFIG.crmPack)}`
 log(`== ${packLine} ==`)
 // The written ledger carries the same line: a saved result cannot claim a
 // revision it did not run.

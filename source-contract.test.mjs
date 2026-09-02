@@ -9,19 +9,7 @@ import { checkPackageSource } from "qwbe-core/package"
 describe("CRM source package boundary", () => {
   it("keeps the shared package contract", async () => {
     const findings = await checkPackageSource(import.meta.dirname, { hierarchy: true })
-    // QWB-54 ticket 12 removed the invented dataMigration; ticket 08 (kernel, parallel band)
-    // is what lets a child cube declare "no predecessor" honestly. Until it lands, the
-    // hierarchy rule still demands a dataMigration and reports exactly one finding, on this
-    // cube; after it lands the list is empty again. Any OTHER finding fails this test.
-    const transitional =
-      findings.length === 1 &&
-      findings[0].rule === "hierarchy" &&
-      findings[0].file === "cubes/crm/organizations/index.ts" &&
-      findings[0].message === "child cube must declare dataMigration"
-    assert.ok(
-      findings.length === 0 || transitional,
-      `unexpected package findings: ${JSON.stringify(findings)}`,
-    )
+    assert.deepEqual(findings, [])
   })
 
   it("declares one CRM parent with contacts and contracts as children", async () => {
