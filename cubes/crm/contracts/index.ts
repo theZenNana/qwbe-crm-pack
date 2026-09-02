@@ -14,9 +14,6 @@
 // What this cube is NOT: there is no ERP here. No organization entity of its own, no invoice,
 // no settings — the historical ERP package is a different package and stays out of the CRM
 // restore.
-//
-// Adapted (QWB-30) from the pre-QWB-19 source preserved at qwbe-packs onto `defineCube` and
-// the current public contract; behaviour unchanged.
 
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from "@effect/platform"
 import { Effect, Schema } from "effect"
@@ -94,13 +91,12 @@ const ROUTES = {
 } as const
 
 // Named, because the kernel's generic list handler reads its `searchable` (and the declared
-// relations) to build the query it serves (QWB-54, ticket 07): the manifest is the whole
+// relations) to build the query it serves: the manifest is the whole
 // answer, so the handler must see it. No `searchable` is declared: nothing filters this
 // list yet, and a declaration made speculatively would serve a filter nobody asked for.
 const manifest = {
   name: "contracts",
-  // Opts the cube into the metadata drift gate (qwbe src/metadata/schema-drift.ts):
-  // an undeclared version means a schema change cannot be caught (QWB-54).
+  // Bump when a field changes; the drift gate refuses to boot otherwise.
   version: "1.0.0",
   parent: "crm",
   tables: [TABLE],
@@ -154,7 +150,7 @@ export const cube = defineCube(group, {
     ],
 
     handlers: {
-      // The kernel's list, not this cube's (QWB-54, ticket 07): paging and sorting from the
+      // The kernel's list, not this cube's: paging and sorting from the
       // manifest, permission required inside the generic handler.
       list: genericList<ContractRow>({
         cube: "crm/contracts",

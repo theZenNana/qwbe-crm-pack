@@ -1,18 +1,17 @@
 #!/usr/bin/env node
-// One-shot backfill for rows written before a schema key existed (QWB-54, tickets 07, 12, 13).
+// One-shot backfill for rows written before a schema key existed.
 //
 // Why: the kernel's generic list serves rows exactly as stored, and a row missing a key the
-// schema declares (present, nullable) fails response encoding. The cube used to hide this by
-// normalizing every response -- a hand-written handler is exactly what ticket 07 removes --
-// so instead the absence is fixed once, in the data.
+// schema declares (present, nullable) fails response encoding, so the absence is fixed once,
+// in the data.
 //
 // Three kinds of fix today:
 //   - `organizationId` on contacts: rows stored before the organizations cube existed (the
-//     key's name is organizationId since the one-name rename, ticket 12).
-//   - `externalId` on contacts and organizations: the external identity of the vtiger import
-//     (QWB-54, ticket 13). Rows created by hand have no source system; they gain the key
+//     key's name is organizationId since the one-name rename).
+//   - `externalId` on contacts and organizations: the external identity of the vtiger import.
+//     Rows created by hand have no source system; they gain the key
 //     with a null value, and the partial unique index ignores nulls.
-//   - the field RENAME inside organizations (QWB-54, ticket 14): rows migrated from the old
+//   - the field RENAME inside organizations: rows migrated from the old
 //     crm/accounts cube carry the old field names `accountNo`/`accountType`; the renamed
 //     schema serves `organizationNo`/`organizationType` and a row missing them fails
 //     response encoding. Each old key moves to its new name in the same jsonb body.
@@ -43,7 +42,7 @@ export const backfillMissingKey = async (pool, schema, table, key) => {
 }
 
 /**
- * The rename statement (QWB-54, ticket 14): moves each old key into its new name inside the
+ * The rename statement: moves each old key into its new name inside the
  * same jsonb body, deleting the old keys. The whole expression reads the OLD row, so the new
  * keys are built from values that are still there; `body ? '<old>'` makes it idempotent -- a
  * renamed row no longer carries the old key, so a second run changes nothing.

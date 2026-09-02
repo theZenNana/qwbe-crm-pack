@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 // Maps an exported vtiger JSONL file into crm/organizations / crm/contacts through the qwbe
-// API (QWB-50; cube renamed QWB-54 ticket 12). The staging set (optional --set) is the
+// API. The staging set (optional --set) is the
 // per-field profile step and the row-count cross-check; the staging cube exposes no row-read
 // endpoint, so the rows come from the same export file that fed the set.
 //
-// Idempotency (QWB-54, ticket 13): every row carries its external identity ON the row --
+// Idempotency: every row carries its external identity ON the row --
 // `externalId: "vtiger:<vtigerId>"` -- and the DATABASE holds a unique index on it
 // (tools/ensure-external-id-index.mjs). The run looks each row up first through the generic
-// list's `?externalId=` filter (QWB-54 ticket 06) and POSTs only when it is missing; a row
+// list's `?externalId=` filter and POSTs only when it is missing; a row
 // that exists is PATCHed. There is NO ledger file to lose: a run killed at half and rerun
 // ends with exactly one row per external identity, because uniqueness lives in the database,
-// not in what a file managed to write down. The old <entity>-idmap.json registry is gone.
+// not in what a file managed to write down.
 //
 // Contacts: organizationId comes from vtiger's own foreign key (contactdetails.accountid),
 // resolved by looking the organization up in qwbe through the same externalId filter (cached
@@ -62,7 +62,7 @@ if (!file || !mappingPath || !Number.isInteger(maxRejects) || maxRejects < 0) {
   process.exit(2)
 }
 
-// No customer-derived file may ever land inside the repository (QWB-50 review, item 9):
+// No customer-derived file may ever land inside the repository:
 // the input must live under the export directory, outside git. Tests opt out explicitly.
 const EXPORT_DIR = "/home/lucian/WebProjects/vtiger-export"
 if (process.env.QWB50_TEST_UNSAFE_INPUT !== "1" && !file.startsWith(EXPORT_DIR + "/")) {
@@ -161,7 +161,7 @@ const describeStatus = (verb, status) => `${verb}: HTTP ${status}`
 // organization id, or null for "looked up, not there" (distinct from "not looked up yet").
 // The durable correspondence is the externalId on the rows; this cache only spares the
 // repeated HTTP round trips for the many contacts of one organization.
-const ORG_ROUTE = "/organizations" // one name everywhere (QWB-54, ticket 12)
+const ORG_ROUTE = "/organizations" // one name everywhere
 const orgCache = new Map()
 const resolveOrganization = async (orgKey) => {
   const k = String(orgKey)
@@ -188,7 +188,7 @@ for await (const line of rl) {
   const externalId = externalKey(row, mapping)
   if (externalId === null) {
     // A row without its external key can never carry an externalId: POSTing it would
-    // silently duplicate it on every rerun (QWB-50 review, item 10, still true under the
+    // silently duplicate it on every rerun (still true under the
     // unique index -- the index only guards rows that HAVE their identity).
     tally.skippedNoKey++
     continue

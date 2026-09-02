@@ -1,5 +1,5 @@
 // @ts-check
-// Shared helpers for the Orca-driven end-to-end scenarios (QWB-51).
+// Shared helpers for the Orca-driven end-to-end scenarios.
 //
 // Plain Node, no new dependencies. Three concerns live here:
 // - an orca() wrapper around the Orca CLI (every call --json, every failure loud),
@@ -50,7 +50,7 @@ const results = []
 
 export function record(name, verdict, detail = "", screenshot = "") {
   // A screenshot miss is an evidence degradation, not a silent pass: the
-  // verdict carries it (QWB-52 review 21) instead of only a console WARN.
+  // verdict carries it instead of only a console WARN.
   if (verdict === "PASS" && typeof screenshot === "string" && screenshot.startsWith("(screenshot unavailable")) {
     verdict = "PASS (no screenshot evidence)"
   }
@@ -169,8 +169,8 @@ export function refFor(refs, match) {
  * first, so an element outside the viewport takes the click on whatever sits
  * at those coordinates -- `<html>` -- and nothing happens. The entity tables
  * scroll horizontally, so every column past the fold (Billing City among them)
- * was unreachable: measured 2026-08-31, the button sat at x=1127 in an 829px
- * viewport and the click landed on HTML; after this scroll the same single
+ * was unreachable: the button sat past the viewport edge and the click landed
+ * on HTML; after this scroll the same single
  * click opens the editor and focus lands in it.
  *
  * Matching is by accessible name, the same string the click already carries,
@@ -227,13 +227,12 @@ const activeElementName =
  * Type at the current focus, through the browser, not the desktop.
  *
  * The OS-level `orca type` needs a focused desktop window; on a locked screen
- * it reports ok and lands nothing (observed 2026-08-31, three runs). The CDP
+ * it reports ok and lands nothing. The CDP
  * path below has the same semantics for the inputs this suite types into: the
  * value is set through the native setter (so React's controlled inputs see
  * it) and an `input` event is dispatched, exactly what a keystroke does.
  *
- * A synthetic value set is not a keystroke (locked-desktop workaround, QWB-52
- * review 20), so the assertion that proves this helper did land is focus:
+ * A synthetic value set is not a keystroke, so the assertion that proves this helper did land is focus:
  * after the click that preceded the type, document.activeElement must carry
  * the same accessible name the click targeted.
  */
@@ -274,9 +273,9 @@ export function type(text) {
  *
  * `orca keypress` is an OS-level key event: like `orca type` it needs a
  * focused desktop window, and on a locked screen it answers "Pressed Return"
- * while nothing reaches the page (measured 2026-08-31: a capture keydown
- * listener recorded an empty array after the CLI reported success, and the
- * inline editor stayed open with its value uncommitted). Dispatching the key
+ * while nothing reaches the page (a capture keydown
+ * listener records an empty array after the CLI reported success, and the
+ * inline editor stays open with its value uncommitted). Dispatching the key
  * at `document.activeElement` has the semantics the suite needs: React
  * listens for these events, and a dispatched Enter commits the inline editor
  * exactly as a real one does -- proved on the live stack, where the same

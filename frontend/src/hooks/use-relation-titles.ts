@@ -1,6 +1,6 @@
 "use client"
 
-// The batch hook behind every relation cell on a page (QWB-54, ticket 11).
+// The batch hook behind every relation cell on a page.
 //
 // Given the page's relation refs, it resolves them with ONE request per
 // distinct target cube (`?ids=a,b,c` -- qwbe sizes the batch by the ids),

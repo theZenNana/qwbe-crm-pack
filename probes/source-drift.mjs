@@ -1,4 +1,4 @@
-// The SOURCE-DRIFT probe (QWB-54, ticket 22, pack side): every copy the kernel holds of this
+// The SOURCE-DRIFT probe (pack side): every copy the kernel holds of this
 // pack must provably be what this repo holds now.
 //
 //   QWBE_REPO=<qwbe> node probes/source-drift.mjs
@@ -8,7 +8,7 @@
 // which strips the manifest and the provenance as bookkeeping). The shelf is judged by the
 // kernel's own drift function - the one `qwbe drift` runs - plus one pack-side rule the
 // kernel cannot know: the shelf must have been staged from THIS repo, never from a scratch
-// copy (a /tmp staging is how the 2026-08-31 drift happened). The destination is decided by
+// copy (a /tmp staging is how the drift happened). The destination is decided by
 // fingerprint against the repo minus the stripped bookkeeping files. Exit 1 on any red: a
 // stale copy above this repo makes every verdict about this pack false. An absent copy is
 // not drift - the pack is simply not installed there.
@@ -21,7 +21,7 @@ const repo = resolve(import.meta.dirname, "..")
 const qwbeRepo = resolve(process.env.QWBE_REPO ?? join(repo, "..", "..", "qwbe"))
 const kernel = (file) => import(pathToFileURL(join(qwbeRepo, "core", "src", file)))
 const { shelfDrift } = await kernel("store-drift.ts")
-const { PROVENANCE, packageSourceFingerprint } = await kernel("package-source.ts")
+const { MANIFEST, PROVENANCE, packageSourceFingerprint } = await kernel("package-source.ts")
 
 let red = 0
 const verdict = (name, ok, detail) => {
@@ -46,14 +46,12 @@ if (!existsSync(shelf)) {
 
 // The destination strips the manifest and the provenance (install.ts isBookkeeping), so its
 // fingerprint is the repo's minus exactly those two files.
-// ponytail: that strip list is copied by hand from the kernel - it does not export it - so if
-// install.ts ever strips more, this line must follow.
 const installed = join(qwbeRepo, "core", "plugins", "crm-pack")
 if (!existsSync(installed)) {
   verdict("plugins/crm-pack", true, "not installed in this checkout")
 } else {
   const fresh =
-    packageSourceFingerprint(installed) === packageSourceFingerprint(repo, ["qwbe-package.json", PROVENANCE])
+    packageSourceFingerprint(installed) === packageSourceFingerprint(repo, [MANIFEST, PROVENANCE])
   verdict("plugins/crm-pack", fresh, fresh ? "matches the repo" : "behind the repo - reinstall from this directory")
 }
 

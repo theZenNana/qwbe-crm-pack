@@ -1,7 +1,7 @@
 "use client"
 
-// The custom-field management surface (QWB-52, moved to Settings by QWB-54
-// F2): lists the selected cube's current custom fields, and lets an
+// The custom-field management surface: lists the selected cube's current
+// custom fields, and lets an
 // ADMINISTRATOR add one (name, type, required, options for a select) or delete
 // one -- no code, no redeploy. Definitions are served by the customfields cube
 // through the same server-side proxy as everything else; the token never

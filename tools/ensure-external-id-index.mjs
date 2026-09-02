@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The unique index on a cube's external identity (QWB-54, ticket 13).
+// The unique index on a cube's external identity.
 //
 // WHY this module exists: the import is idempotent through `externalId` ("vtiger:<crmid>")
 // carried ON each row, and uniqueness must live in the DATABASE, not in the application and

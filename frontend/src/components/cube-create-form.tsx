@@ -1,8 +1,8 @@
 "use client"
 
-// The create form, driven by the same cube metadata as the list and detail
-// (QWB-49). The caller names the static fields to show -- the cube's basic
-// set, not every editable field (QWB-54, F1) -- while labels, required flags,
+// The create form, driven by the same cube metadata as the list and detail.
+// The caller names the static fields to show -- the cube's basic
+// set, not every editable field -- while labels, required flags,
 // nullability and the relation picker come from the published metadata: no
 // field label is hard-coded here, and a name the schema does not define (or
 // does not accept on create) is dropped.

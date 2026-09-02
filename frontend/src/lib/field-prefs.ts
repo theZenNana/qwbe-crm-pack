@@ -1,4 +1,4 @@
-// Per-browser UI preferences over custom fields (QWB-54, F2): which fields
+// Per-browser UI preferences over custom fields: which fields
 // this browser hides from the lists, and what default value a create form
 // prefills per field.
 //

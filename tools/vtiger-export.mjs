@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The vtiger structural exporter (QWB-50).
+// The vtiger structural exporter.
 //
 // Reads from the vtiger MariaDB and writes JSON Lines, one object per active entity row,
 // joining crmentity + base table + *cf companion + address block. It streams: the driver

@@ -1,4 +1,4 @@
-// The contacts list. Same generic component, different cube name (QWB-49);
+// The contacts list. Same generic component, different cube name;
 // the searchable organizationId relation becomes the organization filter.
 import { CubeList } from "@/components/cube-list"
 

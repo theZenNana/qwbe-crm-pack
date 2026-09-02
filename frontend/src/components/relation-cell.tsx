@@ -1,6 +1,6 @@
 "use client"
 
-// One relation cell's display text (QWB-54, ticket 11).
+// One relation cell's display text.
 //
 // The target row's human title, read from the caller's batch-resolved cache
 // (use-relation-titles: one request per target cube per page). Until the

@@ -1,4 +1,4 @@
-// Runtime proof for the rebuilt CRM plugin (QWB-30, criterion 12).
+// Runtime proof for the rebuilt CRM plugin.
 //
 // Boots a real Qwbe kernel on a scratch data dir (QWBE_DATA_DIR + mkdtemp — live data is
 // never touched) with the plugin installed at core/plugins/crm-pack, and attacks the cubes
@@ -12,7 +12,7 @@
 //
 //   QWBE_REPO=~/Projects/qwbe node probes/crm.mjs
 //
-// The plugin must be installed first - the official path (QWB-54, ticket 22):
+// The plugin must be installed first - the official path:
 //   settings:install-from <this directory>  (or POST /settings/packages/install-from)
 // and the server restarted. Never a hand copy into core/plugins.
 // The probe refuses to run if the cubes are not mounted, rather than proving nothing.
@@ -163,7 +163,7 @@ try {
     `out=${JSON.stringify(out)}`,
   )
 
-  // ---- organizations (QWB-47): create / get / update, 403, 404, paging, sorting ----------------
+  // ---- organizations: create / get / update, 403, 404, paging, sorting ----------------
   const anonA = await api.call("/organizations")
   score.check("organizations requires authentication (401)", anonA.status === 401, `http=${anonA.status}`)
 

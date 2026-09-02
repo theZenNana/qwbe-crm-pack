@@ -1,7 +1,7 @@
 "use client"
 
-// The detail page body, assembled from the same cube metadata as the list
-// (QWB-49). One block per published field: label, value, with a link for a
+// The detail page body, assembled from the same cube metadata as the list.
+// One block per published field: label, value, with a link for a
 // filled relation. Optional child lists (for example the derived contacts of
 // one organization) reuse the generic CubeList with a pinned filter.
 

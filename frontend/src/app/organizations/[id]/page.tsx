@@ -1,5 +1,5 @@
 // One organization, assembled from metadata, with its contacts derived by
-// filtering the contacts cube on organizationId (QWB-49). No related-list endpoint
+// filtering the contacts cube on organizationId. No related-list endpoint
 // exists by design; the pinned filter IS the derived list.
 import { CubeDetail } from "@/components/cube-detail"
 

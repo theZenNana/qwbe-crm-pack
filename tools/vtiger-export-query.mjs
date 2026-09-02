@@ -1,4 +1,4 @@
-// Pure builders for the vtiger structural export (QWB-50): the SQL and the column list
+// Pure builders for the vtiger structural export: the SQL and the column list
 // for one entity, nothing else. Kept free of I/O so the tests can assert on the exact
 // SQL without a database.
 //
@@ -6,7 +6,7 @@
 // JOIN base table (inner: no crmentity row, no entity) LEFT JOIN the `*cf` companion
 // LEFT JOIN the address block, on the entity id that equals crmentity.crmid. Only active
 // rows (deleted = 0) ever leave.
-// Structure was researched once (wiki, 2026-08-29); no row value is ever read here.
+// No row value is ever read here.
 
 /** The two entities this export knows. */
 export const ENTITIES = ["accounts", "contacts"]

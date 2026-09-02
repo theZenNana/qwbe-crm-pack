@@ -1,6 +1,6 @@
 "use client"
 
-// The one generic list, driven entirely by cube metadata (QWB-49).
+// The one generic list, driven entirely by cube metadata.
 //
 // It takes a cube name, fetches that cube's metadata and its rows through the
 // server-side proxy, and renders columns from the published fields: label from
@@ -9,8 +9,8 @@
 // `searchable` (a relation field becomes a typeahead search, a plain field a
 // text input). Paging and sorting are server-side end to end: the page, page
 // size and sort parameters travel to qwbe; nothing here slices a full result
-// set. Relation cells resolve in ONE batch request per target cube
-// (QWB-54, ticket 11), not one request per cell.
+// set. Relation cells resolve in ONE batch request per target cube,
+// not one request per cell.
 
 import Link from "next/link"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
@@ -69,13 +69,13 @@ type EditState = { id: string; field: string; value: string }
 export function CubeList({
   cube,
   fixedFilters,
-  // The create flow (QWB-54, F1): when the caller names the create route, the
+  // The create flow: when the caller names the create route, the
   // list carries a visible Add button (header row, and the primary action of
   // the empty state). A list without one -- for example the derived contacts
   // of one organization on the detail page -- renders no button.
   createHref,
   addLabel = "Add",
-  // The empty state's message (QWB-54, F1): the wipe case must not be a silent
+  // The empty state's message: the wipe case must not be a silent
   // empty table. The caller names the entity; the default keeps a generic list
   // honest without pretending to know what the rows are.
   emptyMessage = "No rows yet.",
@@ -312,7 +312,7 @@ export function CubeList({
         )}
       {listError && <p role="alert">{listError}</p>}
       {page && page.rows.length === 0 ? (
-        // The empty state replaces the silent empty table (QWB-54, F1). A
+        // The empty state replaces the silent empty table. A
         // wiped or never-populated cube gets the message and the create
         // action; a filtered search that finds nothing is a different
         // message, with the filters -- not the create button -- as the way
@@ -542,7 +542,7 @@ function Cell({
   // Commit (or dismiss) when the pointer goes down OUTSIDE the editor, as a
   // capture listener on the document. NOT on blur: a trusted click on the
   // edit button queues a browser-side focus change that lands seconds later
-  // (observed 2026-09-01: the freshly mounted editor input was blurred with
+  // (the freshly mounted editor input was blurred with
   // no related target, 4-9 s after the click, by no JavaScript call at all),
   // and a commit-on-blur then closes the editor before anyone can type. A
   // capture pointerdown runs before the focus machinery and is driven by the
@@ -683,7 +683,7 @@ function Cell({
           // editor replaces it, the browser's delayed focus lands on the
           // node that no longer exists, blurs the freshly mounted editor
           // input, and the input's commit-on-blur closes the editor before
-          // anyone could type (observed 2026-09-01: trusted click, handler
+          // anyone could type (trusted click, handler
           // ran, editor mounted and focused, then a blurred input closed it).
           // Suppressing the mousedown focus transfer removes the window;
           // the editor's own autoFocus then holds the focus.

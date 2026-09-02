@@ -1,5 +1,5 @@
 // @ts-check
-// The e2e seed (QWB-51): two organizations with distinguishable names, two contacts, one of
+// The e2e seed: two organizations with distinguishable names, two contacts, one of
 // them pointing at the first organization through `organizationId`.
 //
 // Idempotent: a second run finds its own rows by the seeded names and reuses them, so the

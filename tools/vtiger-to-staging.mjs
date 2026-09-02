@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Uploads a vtiger export (JSON Lines) into a qwbe staging set, in chunks (QWB-50).
+// Uploads a vtiger export (JSON Lines) into a qwbe staging set, in chunks.
 //
 // The chunk contract lives in the staging cube: a chunk is raw TEXT that must end on a
 // LINE boundary, one request may hold at most MAX_CHUNK_CHARS (2,000,000) characters, and
