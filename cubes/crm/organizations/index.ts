@@ -76,6 +76,15 @@ const summary = (o: OrganizationRow): SummaryRow => ({
   ],
 })
 
+// The one declaration per route (QWB-54, 14c): what the manifest publishes, the mount
+// wrapper enforces before the handler runs — the same strings the handlers below require.
+// `list` is not declared: the kernel's read convention (`crm/organizations:read`) applies.
+const ROUTES = {
+  get: "crm/organizations:read",
+  create: "crm/organizations:write",
+  update: "crm/organizations:write",
+} as const
+
 // Named, because the kernel's generic list handler reads its `searchable` (and the declared
 // relations) to build the query it serves (QWB-54, ticket 07): the manifest is the whole
 // answer, so the handler must see it.
@@ -100,6 +109,7 @@ const manifest = {
     { name: "crm/organizations:read", roles: ["admin", "reader"] },
     { name: "crm/organizations:write", roles: ["admin"] },
   ],
+  routes: ROUTES,
   publishes: ["crm/organizations.created"],
   // The predecessor is declared, not invented (QWB-54, tickets 12 and 14): this cube IS the
   // old `crm/accounts`, renamed. Postgres schemas are named after the cube, so without this

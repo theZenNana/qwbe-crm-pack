@@ -195,6 +195,19 @@ try {
     `http=${createdA.status} id=${org?.id}`,
   )
 
+  // The write routes (QWB-54, 14c): the manifest's declaration is enforced by the mount
+  // wrapper, so every mutation answers 403 to a reader. create is checked above; update here.
+  const forbiddenPatchA = await api.call(`/organizations/${org?.id}`, {
+    method: "PATCH",
+    headers: reader.headers,
+    body: JSON.stringify({ billingCity: "Refused" }),
+  })
+  score.check(
+    "reader cannot update an organization (403)",
+    forbiddenPatchA.status === 403,
+    `http=${forbiddenPatchA.status}`,
+  )
+
   const updatedA = await api.call(`/organizations/${org?.id}`, {
     method: "PATCH",
     headers: admin.headers,
@@ -291,6 +304,15 @@ try {
     ghostOrganizationId.status === 200 && ghostOrganizationId.body?.organizationId === "org-doesnotexist",
     `http=${ghostOrganizationId.status}`,
   )
+
+  // The contacts write routes under the same gate: update answers 403 to a reader (create
+  // was checked above), before the admin PATCHes below exercise the allowed path.
+  const forbiddenPatchC = await api.call(`/contacts/${contact?.id}`, {
+    method: "PATCH",
+    headers: reader.headers,
+    body: JSON.stringify({ company: "Refused" }),
+  })
+  score.check("reader cannot update a contact (403)", forbiddenPatchC.status === 403, `http=${forbiddenPatchC.status}`)
 
   // The move: PATCH /contacts/:id changes the one truth, including unlinking.
   const movedContact = await api.call(`/contacts/${contact?.id}`, {
