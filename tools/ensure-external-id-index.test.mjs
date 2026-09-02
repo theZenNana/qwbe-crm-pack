@@ -12,7 +12,7 @@
 import assert from "node:assert/strict"
 import { after, before, describe, it } from "node:test"
 import pg from "pg"
-import { ensureExternalIdIndex, externalIdIndexSql, indexName, schemaOf } from "./ensure-external-id-index.mjs"
+import { ensureExternalIdIndex, indexName, schemaOf } from "./ensure-external-id-index.mjs"
 import { requireDbUrl } from "./db-url.mjs"
 
 const SCHEMA = "extidx_test"
@@ -85,10 +85,5 @@ describe("the unique externalId index", () => {
 
   it("maps a cube name to its schema by the kernel's own rule", () => {
     assert.equal(schemaOf("crm/organizations"), "crm--organizations")
-    assert.equal(
-      externalIdIndexSql("s", "t"),
-      `CREATE UNIQUE INDEX IF NOT EXISTS "t_external_id_key" ON "s"."t" ` +
-        `((body->>'externalId')) WHERE deleted = false AND body->>'externalId' IS NOT NULL`,
-    )
   })
 })

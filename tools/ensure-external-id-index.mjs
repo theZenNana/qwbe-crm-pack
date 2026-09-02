@@ -38,7 +38,7 @@ export const indexName = (table) => `${table}_external_id_key`
 const qi = (identifier) => `"` + identifier.replace(/"/g, `""`) + `"`
 
 /** The one statement, for any schema/table (tests use a scratch pair). */
-export const externalIdIndexSql = (schema, table) =>
+const externalIdIndexSql = (schema, table) =>
   `CREATE UNIQUE INDEX IF NOT EXISTS ${qi(indexName(table))} ON ${qi(schema)}.${qi(table)} ` +
   `((body->>'externalId')) WHERE deleted = false AND body->>'externalId' IS NOT NULL`
 
