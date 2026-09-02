@@ -1,5 +1,5 @@
 // @ts-check
-// The end-to-end scenarios (QWB-51), driven through the Orca browser.
+// The end-to-end scenarios, driven through the Orca browser.
 //
 // Every scenario records one PASS / RED / SKIP line and at least one screenshot into the
 // dated results directory. Nothing here talks to qwbe directly except the metadata lookups
@@ -174,25 +174,10 @@ const pause = async (ms = 800) => {
 /**
  * Leave a Radix Select open with its options readable in the snapshot.
  *
- * Two ways in, and they fight each other -- which is what made the caller's
- * assertion land about one run in two (measured 2026-08-31 on the live stack,
- * replaying only this sequence):
- *
- * - the CDP click the caller already made DOES open the select: right after
- *   it, `aria-expanded` is "true", the five options are in the DOM and focus
- *   sits inside the listbox;
- * - `orca focus` on the trigger then pulls focus back OUT of that listbox,
- *   and radix closes on it. The close is asynchronous: the check that follows
- *   can still read an open list while the close is already on its way, so the
- *   caller's next snapshot finds no options at all. Measured, one attempt:
- *     before: expanded=true,  domOptions=[text,number,date,bool,select]
- *     after:  expanded=false, domOptions=[], active=cf-type/combobox
- *
- * So the keyboard open is only for a select that is really CLOSED, and
- * "really" is read from the DOM: the accessibility snapshot lags a render
- * behind and deciding on it is how the toggle got started. When the list is
- * open, wait for the options to reach the snapshot -- that is what the caller
- * reads -- and touch nothing.
+ * `orca focus` on an OPEN Radix select closes it (asynchronously); open by
+ * keyboard only when the DOM says the select is closed, and when the list is
+ * open wait for the options to reach the snapshot -- that is what the caller
+ * reads.
  */
 async function openSelect(ref) {
   const listOpen = () =>
@@ -294,9 +279,9 @@ export async function scenarioList() {
   type(ORG_A)
   // Every operand is a settled value: waitForText is awaited on its own line,
   // and the Beta check runs on one snapshot taken after the filter had time
-  // to apply. The old form `await waitForText(X) && (async () => {...})()`
-  // bound await to the LEFT operand only, so the right side was an unawaited
-  // Promise -- always truthy -- and the assertion could never fail (QWB-54).
+  // to apply. Writing `await waitForText(X) && (async () => {...})()` binds
+  // await to the LEFT operand only, so the right side becomes an unawaited
+  // Promise -- always truthy -- and the assertion could never fail.
   const alphaShown = await waitForText(ORG_A)
   await new Promise((r) => setTimeout(r, 1500))
   const betaGone = !snapshot().text.includes(ORG_B)
@@ -327,7 +312,7 @@ export async function scenarioInlineEdit(api) {
   // has committed, an editable cell renders as plain text, so a click can
   // never land on DOM the handler is not attached to yet (the race the
   // earlier retry loop hid). Wait for the BUTTON to appear, then click ONCE
-  // (QWB-52 review 7: no retries, no synthetic fallback click).
+  // (no retries, no synthetic fallback click).
   let cityBtn
   for (let i = 0; i < 20 && !cityBtn; i++) {
     cityBtn = Object.entries(snap.refs).find(
@@ -406,7 +391,7 @@ export async function scenarioInlineEdit(api) {
 }
 
 // --- 4. inline edit on a NON-editable field is refused --------------------------
-// The list hides every non-editable column by design (QWB-49: fields absent
+// The list hides every non-editable column by design (fields absent
 // from the create payload are backend bookkeeping), so the refusal is asserted
 // where a non-editable field IS shown: the detail page. It must render the
 // field's value as plain text and offer no edit affordance for it.
@@ -508,7 +493,7 @@ export async function scenarioLogout() {
   shot("06-final", { full: true })
   // The bounce now carries the destination (/login?next=%2Fme), so compare the
   // PATH, not the whole URL: endsWith("/login") would call a correct redirect
-  // a failure (QWB-54).
+  // a failure.
   const onLogin = new URL(snapshot().origin).pathname === "/login"
   const pass = bounced && onLogin && !snap.text.includes("Signed in as")
   return record(name, pass ? "PASS" : "RED", pass ? "/me redirects to /login after logout" : "/me still reachable", "06-final.png")
@@ -519,7 +504,7 @@ export async function scenarioLogout() {
 // create form is the F1 surface: the page names the basic field set, the
 // metadata supplies labels and required flags, the submit goes through the
 // server proxy and lands on the new row's detail page. externalId must NOT be
-// offered (review 14b round 2, finding 7): it carries the import identity, and
+// offered: it carries the import identity, and
 // its unique partial index turns a hand-typed duplicate into a 500, not a
 // refusal.
 export async function scenarioCreateOrganization(api) {
@@ -565,8 +550,8 @@ export async function scenarioCreateOrganization(api) {
   )
 }
 
-// --- 7. a custom field defined in Settings, used on the list, deleted (QWB-52, F2) ---
-// F2 moved the definitions panel off the lists and onto /settings: the panel is
+// --- 7. a custom field defined in Settings, used on the list, deleted ---
+// The definitions panel lives off the lists and onto /settings: the panel is
 // always rendered there (no button opens it) and the Entity selector picks the
 // cube its definitions target. Define and delete happen on /settings; the value
 // is set inline on the contacts list like any other cell.
@@ -660,7 +645,7 @@ export async function scenarioCustomField(api) {
 
   // 2b. set it inline on the seeded contact, on the list. The affordance is
   // gated on hydration in the app, so wait for the BUTTON (never click plain
-  // text) and then click ONCE (QWB-52 review 7).
+  // text) and then click ONCE.
   await open("/contacts")
   await settle(CONTACT_LINKED)
   if (!(await waitForText(CF_LABEL, 15_000))) {
@@ -692,8 +677,7 @@ export async function scenarioCustomField(api) {
   // 4. the save must be VISIBLE in the cell, not merely "somewhere on the
   // page". The panel is not on the list anymore (F2), so the options string
   // can only come from a stray panel render: require the cell's edit button
-  // AND the options string absent AND the bare value text on the page
-  // (QWB-52 review 3's merge-bug guard, adapted).
+  // AND the options string absent AND the bare value text on the page.
   await pause()
   snap = snapshot()
   const panelClosed = !snap.text.includes(CF_OPTIONS)
@@ -730,7 +714,7 @@ export async function scenarioCustomField(api) {
   // 5. delete the definition in Settings (F2); the column disappears on the
   // list's next metadata read. Navigation reset the Entity selector, so
   // address the contacts cube again. The delete is a two-step confirm in the
-  // UI (QWB-52 review 17): the first click scans how many rows carry a value.
+  // UI: the first click scans how many rows carry a value.
   await open("/settings")
   if (!(await waitForText("Fields defined at runtime", 15_000))) {
     shot("07-delete-RED", { full: true })
@@ -788,7 +772,7 @@ export async function scenarioCustomField(api) {
   )
 }
 
-// --- 8. the permission half (QWB-52 review 8) ------------------------------------
+// --- 8. the permission half -----------------------------------------------
 // A reader (customfields:read only, no customfields:write) gets the Settings
 // area's refusal message instead of the definitions panel (F2 moved the panel
 // there), and a direct call to the definition endpoints answers 403 from
@@ -845,7 +829,7 @@ export async function scenarioReader(qwbePort) {
 }
 
 
-// --- 9. the type coverage the ticket names (QWB-52 review 8) ----------------------
+// --- 9. the type coverage ----------------------------------------------------
 // bool / number / date custom fields set inline (bool through the checkbox
 // editor, number and date through the text editor), a required TEXT field
 // emptied to "" refused with qwbe's own message, and every definition
@@ -1078,8 +1062,8 @@ export async function scenarioCustomFieldTypes(api, seed) {
   snap = snapshot()
   if (!snap.text.includes("yes")) return record(name, "RED", "the bool cell does not show yes after the toggle", "09-bool-RED.png")
 
-  // The date field: the metadata currently publishes it as text (QWB-52
-  // review 4: the kernel maps date to type string without a format), so it
+  // The date field: the metadata currently publishes it as text (the
+  // kernel maps date to type string without a format), so it
   // edits as text and the pack validates the YYYY-MM-DD shape.
   ok = (await openCellEditor(D_LABEL)) &&
     (await (async () => {

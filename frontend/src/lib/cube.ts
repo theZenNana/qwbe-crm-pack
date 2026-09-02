@@ -1,4 +1,4 @@
-// Metadata-driven list and detail logic for the CRM frontend (QWB-49).
+// Metadata-driven list and detail logic for the CRM frontend.
 //
 // The one design rule: adding a field to a cube must appear in the list without a
 // line of frontend code. Everything here reads the published cube metadata
@@ -20,7 +20,7 @@ export type FieldMetadata = {
   nullable: boolean
   enum: string[] | null
   relation: { target: string; entity: string; summary: string | null } | null
-  // QWB-46: true when the field is a runtime-defined custom field. Its value
+  // True when the field is a runtime-defined custom field. Its value
   // lives in the row's reserved `custom` sub-object, not at the row's top level.
   custom: boolean
 }
@@ -103,9 +103,7 @@ export function httpPrefixOf(cube: string): string {
 
 // The browser's single reaction to a 401 from the proxy: the session is dead
 // and the proxy already cleared the cookie on the way out, so leave for /login
-// with this page as the destination. Painting the status into the page instead
-// ("list request failed: 401") left the person on a view that could never
-// recover until they typed /login themselves (QWB-54).
+// with this page as the destination.
 // Same signature as fetch, so it drops in wherever a `typeof fetch` is asked for.
 export async function apiFetch(
   input: RequestInfo | URL,
@@ -295,13 +293,6 @@ export function titleOf(meta: CubeMetadata, row: Row): string {
 // to the raw id when either request fails -- a cell never blocks on it.
 const metaCache = new Map<string, CubeMetadata>()
 
-// A definition change re-publishes the target cube's metadata; a relation
-// resolved before the change must not keep serving the stale field list for
-// the rest of the session. The panel's onChanged path calls this.
-export function clearRelationMetaCache(): void {
-  metaCache.clear()
-}
-
 // Fetches (and session-caches) a cube's published metadata, or null when the
 // request fails. Shared by every relation surface: batch cell resolution and
 // the typeahead both need the title field, and each cube's metadata is fetched
@@ -320,23 +311,6 @@ export async function relationMeta(
     return meta
   } catch {
     return null
-  }
-}
-
-export async function resolveRelationTitle(
-  target: string,
-  id: string,
-  doFetch: typeof fetch = apiFetch,
-): Promise<string> {
-  try {
-    const meta = await relationMeta(target, doFetch)
-    if (!meta) return id
-    const r = await doFetch(cubeApiPath(target, `/${id}`))
-    if (!r.ok) return id
-    const row = (await r.json()) as Row
-    return titleOf(meta, row)
-  } catch {
-    return id
   }
 }
 

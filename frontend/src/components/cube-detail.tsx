@@ -1,12 +1,12 @@
 "use client"
 
-// The detail page body, assembled from the same cube metadata as the list
-// (QWB-49). One block per published field: label, value, with a link for a
+// The detail page body, assembled from the same cube metadata as the list.
+// One block per published field: label, value, with a link for a
 // filled relation. Optional child lists (for example the derived contacts of
 // one organization) reuse the generic CubeList with a pinned filter.
 
 import Link from "next/link"
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 
 import {
   apiFetch,
@@ -17,9 +17,10 @@ import {
   hrefForRelation,
   metadataApiPath,
   routeOf,
-  resolveRelationTitle,
   titleOf,
 } from "@/lib/cube"
+import { relationRefsOf } from "@/lib/relation-batch"
+import { useRelationTitles } from "@/hooks/use-relation-titles"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -72,6 +73,14 @@ export function CubeDetail({
     }
   }, [cube, id])
 
+  // Every relation value on the row, deduplicated; one ids batch per distinct
+  // target cube resolves their titles (the same hook the list uses).
+  const relationRefs = useMemo(
+    () => (meta && row ? relationRefsOf([row], meta.fields) : []),
+    [meta, row],
+  )
+  const resolveTitle = useRelationTitles(relationRefs)
+
   if (error) return <p role="alert">{error}</p>
   if (!meta || !row) return <Skeleton className="h-64 w-full" />
 
@@ -100,6 +109,7 @@ export function CubeDetail({
                       <RelationLinkValue
                         target={field.relation.target}
                         id={String(value)}
+                        title={resolveTitle(field.relation.target, String(value))}
                       />
                     ) : field.type === "boolean" ? (
                       value === null || value === undefined ? (
@@ -132,21 +142,19 @@ export function CubeDetail({
   )
 }
 
-// A relation on the detail page shows the target row's title, resolved through
-// the target cube's own metadata and row endpoint (falling back to the raw id
-// when either request fails), and links to the target's detail page when this
-// app has a route for it.
-function RelationLinkValue({ target, id }: { target: string; id: string }) {
-  const [title, setTitle] = useState<string | null>(null)
-  useEffect(() => {
-    let alive = true
-    resolveRelationTitle(target, id).then((t) => {
-      if (alive) setTitle(t)
-    })
-    return () => {
-      alive = false
-    }
-  }, [target, id])
+// A relation on the detail page shows the target row's title (resolved in a
+// single batch per target cube, falling back to the raw id when the batch
+// fails), and links to the target's detail page when this app has a route
+// for it.
+function RelationLinkValue({
+  target,
+  id,
+  title,
+}: {
+  target: string
+  id: string
+  title: string | null
+}) {
   return (
     <Link className="underline" href={hrefForRelation(target, id)!}>
       {title ?? id}

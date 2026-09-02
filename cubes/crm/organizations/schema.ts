@@ -1,8 +1,8 @@
 // The Organization schemas, split out of index.ts to stay under the size cap
-// (QWB-47 review: split the file, never raise the cap). Same domain, same decisions —
+// (split the file, never raise the cap). Same domain, same decisions —
 // see index.ts for the reasoning that surrounds these fields.
 //
-// Naming: one name everywhere (QWB-54, ticket 12) — the entity is Organization and so are
+// Naming: one name everywhere — the entity is Organization and so are
 // the schema identifiers. The two carried-over number/type fields keep the same rename rule:
 // `organizationNo` and `organizationType`, never `type` alone. `type` is the entity-type meta
 // column that EntityMeta carries ("Organization"); the kernel builds the row as
@@ -18,7 +18,7 @@ export const Organization = Schema.Struct({
   /** The one required field, and the summary title. */
   name: Schema.NonEmptyTrimmedString,
   /** The external identity of a row that came from (or is destined for) a source system:
-   *  "vtiger:<crmid>" for the import (QWB-54, ticket 13). Null for rows created by hand.
+   *  "vtiger:<crmid>" for the import. Null for rows created by hand.
    *  Uniqueness lives in the DATABASE: a partial unique index on this field (only live rows,
    *  only non-null values) is ensured by tools/ensure-external-id-index.mjs -- a plugin cube
    *  cannot create it (the kernel's per-cube role holds DML only), so the pack's tool does,

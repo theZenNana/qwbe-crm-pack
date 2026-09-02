@@ -1,4 +1,4 @@
-// Pure mapping for QWB-50, external identity added by QWB-54 ticket 13: an exported vtiger
+// Pure mapping: an exported vtiger
 // row + a mapping file -> the payload for the qwbe cube API. No I/O, so the tests can run it
 // on synthetic fixtures.
 //

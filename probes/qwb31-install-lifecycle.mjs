@@ -1,9 +1,9 @@
-// QWB-31 - installing the local CRM plugin through the public install-from door, end to end.
+// Installing the local CRM plugin through the public install-from door, end to end.
 //
 //   QWBE_REPO=~/Projects/qwbe node probes/qwb31-install-lifecycle.mjs
 //
-// The plugin lives OUTSIDE the repo at ~/Projects/qwbe-packs/plugins/crm-pack (QWB-30 built it
-// there). This probe proves the acceptance criteria that need a running system, in order:
+// The plugin lives OUTSIDE the repo at ~/Projects/qwbe-packs/plugins/crm-pack. This probe
+// proves the acceptance criteria that need a running system, in order:
 //
 //   1. clean Qwbe (scratch store WITHOUT crm-pack) boots and serves no /contacts or /contracts
 //   2. POST /settings/packages/install-from with the local directory is the ONLY install step

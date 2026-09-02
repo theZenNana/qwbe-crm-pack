@@ -1,5 +1,5 @@
 // The Contact schemas, split out of index.ts to stay under the size cap
-// (QWB-47 review: split the file, never raise the cap). Same domain, same decisions —
+// (split the file, never raise the cap). Same domain, same decisions —
 // see index.ts for the reasoning that surrounds these fields.
 
 import { Schema } from "effect"
@@ -10,7 +10,7 @@ export const Contact = Schema.Struct({
   name: Schema.String,
   email: Schema.String,
   /** The external identity of a row that came from (or is destined for) a source system:
-   *  "vtiger:<crmid>" for the import (QWB-54, ticket 13). Null for rows created by hand.
+   *  "vtiger:<crmid>" for the import. Null for rows created by hand.
    *  Uniqueness lives in the DATABASE: a partial unique index on this field (only live rows,
    *  only non-null values) is ensured by tools/ensure-external-id-index.mjs -- a plugin cube
    *  cannot create it (the kernel's per-cube role holds DML only), so the pack's tool does,

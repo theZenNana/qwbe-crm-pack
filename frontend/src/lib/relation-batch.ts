@@ -1,7 +1,6 @@
-// Batched relation resolution for the generic list (QWB-54, ticket 11).
+// Batched relation resolution for the generic list.
 //
-// The old list fetched one relation cell at a time: a 25-row page cost 25
-// round-trips before anything on the page was readable. qwbe's list contract
+// qwbe's list contract
 // takes `ids=a,b,c` and sizes the batch by the ids themselves
 // (qwbe core/src/kernel/list.ts: `ids=` is a batch, not a page), so one
 // request per DISTINCT TARGET CUBE resolves every relation cell on the page.

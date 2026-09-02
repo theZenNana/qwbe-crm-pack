@@ -1,4 +1,4 @@
-// The ORGANIZATIONS cube — the Organization, third child of the CRM plugin (QWB-47).
+// The ORGANIZATIONS cube — the Organization, third child of the CRM plugin.
 //
 // Domain: an ORGANIZATION is the company a business deals with. This is the entity the vtiger
 // users worked in all day (about 60 thousand rows), rebuilt here as a photograph of the vtiger
@@ -7,7 +7,7 @@
 // carries createdAt), no parent-to-parent hierarchy (explicitly out of scope), and no custom
 // fields (those are a separate system, not this ticket).
 //
-// One name everywhere (QWB-54, ticket 12): the cube, its route, its table, its permissions,
+// One name everywhere: the cube, its route, its table, its permissions,
 // its command and its event are all "organizations". The relation to contacts has ONE truth:
 // `Contact.organizationId`. It lives on the contact, it is nullable, and an organization's
 // contact list is derived by filtering contacts on it. This cube does not hold a contacts list
@@ -86,23 +86,17 @@ const ROUTES = {
 } as const
 
 // Named, because the kernel's generic list handler reads its `searchable` (and the declared
-// relations) to build the query it serves (QWB-54, ticket 07): the manifest is the whole
+// relations) to build the query it serves: the manifest is the whole
 // answer, so the handler must see it.
 const manifest = {
   name: "organizations",
-  // Opts the cube into the metadata drift gate (qwbe src/metadata/schema-drift.ts):
-  // an undeclared version means a schema change cannot be caught (QWB-54). Bumped 1.0.0 ->
-  // 1.1.0 for the externalId field (QWB-54, ticket 13): a schema change with the version
-  // held still would refuse to boot at mount.
+  // Bump when a field changes; the drift gate refuses to boot otherwise.
   version: "1.1.0",
   parent: "crm",
   tables: [TABLE],
   entity: ENTITY,
   sortable: ["name", "industry", "createdAt"],
-  // What relational.search actually serves to the links route: exact match on these. The
-  // SAME list is what the kernel's generic list accepts as `<field>=` filters (QWB-54,
-  // ticket 06); `externalId` is declared for the import's lookup (QWB-54, ticket 13): the
-  // map tool finds a row by its external identity before it creates one.
+  // Exact match for relational.search and the generic list's `<field>=` filters; `externalId` is the import's lookup key.
   searchable: ["name", "industry", "externalId"],
   requiresAuth: true,
   permissions: [
@@ -111,13 +105,13 @@ const manifest = {
   ],
   routes: ROUTES,
   publishes: ["crm/organizations.created"],
-  // The predecessor is declared, not invented (QWB-54, tickets 12 and 14): this cube IS the
-  // old `crm/accounts`, renamed. Postgres schemas are named after the cube, so without this
-  // declaration the renamed cube would boot on an empty `crm--organizations` schema while the
-  // rows stayed in `crm--accounts`. The kernel's `migrateDataSchemas` moves the schema, and
-  // the provenance LEDGER -- not this claim -- decides whether crm/accounts really belonged
-  // to crm-pack (checked at boot; kernel migrate-ownership.ts). Rows from before the field
-  // rename still carry `accountNo`/`accountType` in their body: the one-shot backfill
+  // The predecessor is declared, not invented: this cube IS the old `crm/accounts`, renamed.
+  // Postgres schemas are named after the cube, so without this declaration the renamed cube
+  // would boot on an empty `crm--organizations` schema while the rows stayed in
+  // `crm--accounts`. The kernel's `migrateDataSchemas` moves the schema, and the provenance
+  // LEDGER -- not this claim -- decides whether crm/accounts really belonged to crm-pack
+  // (checked at boot; kernel migrate-ownership.ts). Legacy rows still carry
+  // `accountNo`/`accountType` in their body: the one-shot backfill
   // (tools/backfill-contact-organizationid.mjs) renames those keys once, in the data.
   dataMigration: [{ fromCube: "crm/accounts", toCube: "crm/organizations", fromPlugin: "crm-pack" }],
 }
@@ -136,7 +130,7 @@ export const cube = defineCube(group, {
     ],
 
     handlers: {
-      // The kernel's list, not this cube's (QWB-54, ticket 07). Paging, sorting, `q`, the
+      // The kernel's list, not this cube's: paging, sorting, `q`, the
       // `searchable` fields and the declared relations all come from the manifest; the
       // `<name>:read` permission is required inside the generic handler.
       list: genericList<OrganizationRow>({

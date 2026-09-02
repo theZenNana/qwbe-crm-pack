@@ -25,7 +25,6 @@ import {
   listQueryString,
   renderKindOf,
   metadataApiPath,
-  resolveRelationTitle,
   routeOf,
   saveCell,
   sortRequestFor,
@@ -340,27 +339,6 @@ describe("relation links", () => {
 
   it("no row link for a cube without a route", () => {
     assert.equal(rowHref("crm/contracts", "ctr-1"), null)
-  })
-})
-
-describe("relation titles", () => {
-  it("resolves the title through the target's metadata and row endpoint", async () => {
-    const calls: string[] = []
-    const doFetch = (async (input: RequestInfo | URL) => {
-      calls.push(String(input))
-      if (String(input).includes("/metadata")) {
-        return new Response(JSON.stringify(meta({ cube: "crm/organizations", entity: "Organization" })))
-      }
-      return new Response(JSON.stringify({ id: "org-1", name: "Acme SRL" }))
-    }) as unknown as typeof fetch
-    assert.equal(await resolveRelationTitle("crm/organizations", "org-1", doFetch), "Acme SRL")
-    assert.ok(calls.some((c) => c.includes("/catalog/")), "the target metadata is read")
-    assert.ok(calls.some((c) => c.endsWith("/organizations/org-1")), "the target row is read")
-  })
-
-  it("falls back to the raw id when the target does not answer", async () => {
-    const doFetch = (async () => new Response("nope", { status: 404 })) as unknown as typeof fetch
-    assert.equal(await resolveRelationTitle("crm/contracts", "ctr-1", doFetch), "ctr-1")
   })
 })
 

@@ -1,5 +1,5 @@
 // The organizations list. Nothing entity-specific here but the cube name:
-// columns, sorting, search and paging all come from the cube metadata (QWB-49).
+// columns, sorting, search and paging all come from the cube metadata.
 import { CubeList } from "@/components/cube-list"
 
 export default function OrganizationsPage() {

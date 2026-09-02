@@ -1,4 +1,4 @@
-// The Settings area (QWB-54, F2): runtime custom fields are managed here, per
+// The Settings area: runtime custom fields are managed here, per
 // entity, never on the lists. The cube selector addresses every cube this pack
 // serves -- organizations, contacts and contracts -- whether or not the app has
 // a list route for it, because definitions ride the customfields API, not the

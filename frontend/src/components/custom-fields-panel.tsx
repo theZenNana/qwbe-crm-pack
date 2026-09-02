@@ -1,7 +1,7 @@
 "use client"
 
-// The custom-field management surface (QWB-52, moved to Settings by QWB-54
-// F2): lists the selected cube's current custom fields, and lets an
+// The custom-field management surface: lists the selected cube's current
+// custom fields, and lets an
 // ADMINISTRATOR add one (name, type, required, options for a select) or delete
 // one -- no code, no redeploy. Definitions are served by the customfields cube
 // through the same server-side proxy as everything else; the token never
@@ -23,6 +23,7 @@ import {
   type Row,
 } from "@/lib/cube"
 import {
+  EMPTY_PREFS,
   readPrefs,
   writePrefs,
   withDefault,
@@ -123,7 +124,7 @@ export function CustomFieldsPanel({
   // the definition itself is what the API owns; see field-prefs.ts for why.
   // Read in an effect, so the server render and the first client render agree
   // (no hydration mismatch) and a cube switch re-reads its own document.
-  const [prefs, setPrefs] = useState<CustomFieldPrefs>({ hidden: [], defaults: {} })
+  const [prefs, setPrefs] = useState<CustomFieldPrefs>(EMPTY_PREFS)
   useEffect(() => {
     // The deferred read is the codebase's hydration pattern (the hydrated
     // gate below uses the same timer): localStorage exists only on the

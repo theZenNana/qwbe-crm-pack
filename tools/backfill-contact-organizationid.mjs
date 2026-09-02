@@ -1,18 +1,17 @@
 #!/usr/bin/env node
-// One-shot backfill for rows written before a schema key existed (QWB-54, tickets 07, 12, 13).
+// One-shot backfill for rows written before a schema key existed.
 //
 // Why: the kernel's generic list serves rows exactly as stored, and a row missing a key the
-// schema declares (present, nullable) fails response encoding. The cube used to hide this by
-// normalizing every response -- a hand-written handler is exactly what ticket 07 removes --
-// so instead the absence is fixed once, in the data.
+// schema declares (present, nullable) fails response encoding, so the absence is fixed once,
+// in the data.
 //
 // Three kinds of fix today:
 //   - `organizationId` on contacts: rows stored before the organizations cube existed (the
-//     key's name is organizationId since the one-name rename, ticket 12).
-//   - `externalId` on contacts and organizations: the external identity of the vtiger import
-//     (QWB-54, ticket 13). Rows created by hand have no source system; they gain the key
+//     key's name is organizationId since the one-name rename).
+//   - `externalId` on contacts and organizations: the external identity of the vtiger import.
+//     Rows created by hand have no source system; they gain the key
 //     with a null value, and the partial unique index ignores nulls.
-//   - the field RENAME inside organizations (QWB-54, ticket 14): rows migrated from the old
+//   - the field RENAME inside organizations: rows migrated from the old
 //     crm/accounts cube carry the old field names `accountNo`/`accountType`; the renamed
 //     schema serves `organizationNo`/`organizationType` and a row missing them fails
 //     response encoding. Each old key moves to its new name in the same jsonb body.
@@ -31,6 +30,7 @@
 // With neither variable set the tool refuses to guess and exits 2.
 
 import pg from "pg"
+import { dbUrl } from "./db-url.mjs"
 
 /** The one statement, for any schema/table/key (tests use a scratch pair). */
 export const fillKeySql = (schema, table, key) =>
@@ -43,7 +43,7 @@ export const backfillMissingKey = async (pool, schema, table, key) => {
 }
 
 /**
- * The rename statement (QWB-54, ticket 14): moves each old key into its new name inside the
+ * The rename statement: moves each old key into its new name inside the
  * same jsonb body, deleting the old keys. The whole expression reads the OLD row, so the new
  * keys are built from values that are still there; `body ? '<old>'` makes it idempotent -- a
  * renamed row no longer carries the old key, so a second run changes nothing.
@@ -57,33 +57,15 @@ export const renameAccountKeysSql = (schema, table) =>
 export const renameOrganizationKeys = (pool, schema = "crm--organizations", table = "organizations") =>
   pool.query(renameAccountKeysSql(schema, table)).then((r) => r.rowCount ?? 0)
 
-export const backfillOrganizationId = (pool, schema = "crm--contacts", table = "contacts") =>
-  backfillMissingKey(pool, schema, table, "organizationId")
-
-export const backfillExternalId = (pool, schema, table) => backfillMissingKey(pool, schema, table, "externalId")
-
 const TARGETS = [
   { schema: "crm--contacts", table: "contacts", key: "organizationId" },
   { schema: "crm--contacts", table: "contacts", key: "externalId" },
   { schema: "crm--organizations", table: "organizations", key: "externalId" },
 ]
 
-const connectionUrl = () => {
-  if (process.env.QWBE_DATABASE_URL) return process.env.QWBE_DATABASE_URL
-  if (process.env.QWBE_PG_PASSWORD) {
-    const u = new URL("postgres://localhost/postgres")
-    u.hostname = process.env.QWBE_PG_HOST ?? "localhost"
-    u.port = process.env.QWBE_PG_PORT ?? "5433"
-    u.username = process.env.QWBE_PG_USER ?? "postgres"
-    u.password = process.env.QWBE_PG_PASSWORD
-    return u.toString()
-  }
-  return null
-}
-
 const isMain = process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href
 if (isMain) {
-  const url = connectionUrl()
+  const url = dbUrl()
   if (!url) {
     console.error("refusing to guess the database: set QWBE_DATABASE_URL, or QWBE_PG_PASSWORD (plus optional QWBE_PG_HOST/PORT/USER)")
     process.exit(2)

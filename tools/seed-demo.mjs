@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// Demo data for the local sandbox stack (QWB-54, F3): 50 organizations, 50 contacts,
+// Demo data for the local sandbox stack: 50 organizations, 50 contacts,
 // 5 contracts, plus the custom fields they carry -- generated, never imported.
 //
-// The owner's rule (2026-09-01): dummy data is GENERATED, never committed; vtiger
+// The rule: dummy data is GENERATED, never committed; vtiger
 // contributes only the STRUCTURE of the custom fields (names, types, required flags --
 // read once from the real system's field definitions), never a row and never its picklist
 // values. Every value below is produced deterministically from a row index, so the same

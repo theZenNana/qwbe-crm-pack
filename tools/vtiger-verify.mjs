@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-// Verification for the QWB-50 import: COUNTS only, never a row value.
+// Verification of the import: COUNTS only, never a row value.
 //
 // Per entity it prints: rows exported (line count of the JSONL), rows in the staging set
 // (optional), rows living in qwbe (the organizations count command; the contacts page total),
 // and the differences. For the organization-to-contact relation it counts, from the export
-// file and externalId lookups into qwbe (QWB-54, ticket 13 -- the id map files are gone; the
+// file and externalId lookups into qwbe (the
 // correspondence lives on the rows), how many contacts point at an organization that never
 // made it into qwbe.
 //

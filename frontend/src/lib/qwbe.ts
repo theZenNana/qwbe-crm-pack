@@ -1,8 +1,7 @@
 // The one place that calls qwbe on behalf of the signed-in person: it reads the
 // session cookie, hands the token to proxyToQwbe (the only function that puts
 // it in a request header) and reports a dead session through clearCookie, so
-// the caller can send the browser to /login instead of painting a 401
-// (QWB-54).
+// the caller can send the browser to /login instead of painting a 401.
 // Route handlers and server components both call this; nothing else reads the
 // cookie or names the header.
 //

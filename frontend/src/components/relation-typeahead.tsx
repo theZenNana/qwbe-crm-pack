@@ -1,9 +1,8 @@
 "use client"
 
-// The searchable relation filter (QWB-54, ticket 11).
+// The searchable relation filter.
 //
-// Replaces the old dropdown that loaded the target cube's FIRST 200 ROWS and
-// pretended that was a choice out of 60k. This is a typeahead: nothing is
+// This is a typeahead: nothing is
 // loaded until the field is focused, and every keystroke pause sends ONE
 // `q=<text>&limit=20` search request -- qwbe scans exactly the fields the
 // target's manifest declares searchable -- and answers with 20 candidates.
@@ -45,7 +44,7 @@ export function RelationTypeahead({
   onChange,
   // "filter" (default) is the list filter row: the aria labels say Filter by /
   // Clear ... filter and the empty input's placeholder is All. "form" is the
-  // create-form picker (QWB-54, F1): same combobox behaviour, labels that name
+  // create-form picker: same combobox behaviour, labels that name
   // the field instead of the filter.
   variant = "filter",
 }: {
@@ -157,7 +156,7 @@ export function RelationTypeahead({
   // Commit (or dismiss) when the pointer goes down OUTSIDE the picker, as a
   // capture listener on the document -- the same pattern the inline editor
   // uses, because commit-on-blur loses the race against the browser's delayed
-  // focus changes (observed 2026-09-01, see cube-list.tsx).
+  // focus changes (see cube-list.tsx).
   useEffect(() => {
     if (!open) return undefined
     const onDocPointerDown = (e: PointerEvent) => {

@@ -1,5 +1,5 @@
 // @ts-check
-// One command runs everything (QWB-51): npm run e2e
+// One command runs everything: npm run e2e
 //
 // 1. Copies the merged qwbe platform from its repository WITHOUT touching the repository
 //    (git archive of origin/main) into /tmp/qwbe-e2e, and installs the crm-pack cubes the
@@ -98,21 +98,8 @@ if (process.platform !== "linux") fail("this suite drives the Orca desktop app a
 rmSync(CONFIG.workDir, { recursive: true, force: true })
 rmSync(CONFIG.dataDir, { recursive: true, force: true })
 mkdirSync(CONFIG.workDir, { recursive: true })
-// WHICH kernel this run is built from.
-//
-// This line said `origin/main`, hardcoded, so every run of this suite tested the
-// merged kernel and never the branch being written -- the generic list handler
-// the filter scenarios walk was on the branch, and no scenario ever reached it.
-// A suite that silently tests something other than what you changed is worse
-// than no suite. HEAD of whatever the kernel repository has checked out is what
-// "run the suite" means; QWBE_E2E_KERNEL_REF pins another ref for the case where
-// a release check really does want origin/main.
-//
-// `git archive` carries COMMITTED content only, by design: this stays a copy
-// addressable by a hash, not a copy of someone's desk. An uncommitted kernel
-// change is therefore NOT in the run -- which is exactly the "I fixed it and the
-// suite still fails" trap, so a dirty tree is printed as a warning instead of
-// being swallowed.
+// WHICH kernel this run is built from: ref = HEAD, QWBE_E2E_KERNEL_REF pins another ref;
+// uncommitted kernel changes are not in the run (git archive carries committed content only).
 const gitIn = (dir, args) => execSync(`git -C ${dir} ${args}`, { encoding: "utf8" }).trim()
 const dirtyCount = (dir) => gitIn(dir, "status --porcelain").split("\n").filter(Boolean).length
 const kernelRef = process.env.QWBE_E2E_KERNEL_REF ?? "HEAD"
@@ -137,13 +124,7 @@ cpSync(CONFIG.crmPack, join(CONFIG.workDir, "core", "plugins", "crm-pack"), {
   recursive: true,
   filter: (src) => !src.includes(`${CONFIG.crmPack}/node_modules/.cache`),
 })
-// Same treatment for the customfields pack (QWB-52): a separate repository,
-// installed the same way, its qwbe-core symlink repointed at THIS copy.
-cpSync(CONFIG.customFieldsPack, join(CONFIG.workDir, "core", "plugins", "customfields-pack"), {
-  recursive: true,
-  filter: (src) => !src.includes(`${CONFIG.customFieldsPack}/node_modules/.cache`),
-})
-for (const packDir of ["crm-pack", "customfields-pack"]) {
+for (const packDir of ["crm-pack"]) {
   const coreLink = join(CONFIG.workDir, "core", "plugins", packDir, "node_modules", "qwbe-core")
   if (existsSync(coreLink)) {
     rmSync(coreLink)
@@ -152,8 +133,7 @@ for (const packDir of ["crm-pack", "customfields-pack"]) {
   // Deduplicate `effect`: the packs ship their own copy, and a second module
   // instance makes the kernel's `ast instanceof AST.Transformation` checks
   // fail, which silently turns OFF the custom-value fold for every plugin
-  // cube (observed on qwbe main 2026-08-31; reported to the backend ticket).
-  // Resolving to the copy's single instance restores the QWB-46 contract.
+  // cube; resolving to the copy's single instance keeps the fold on.
   for (const dep of ["effect", "@effect"]) {
     rmSync(join(CONFIG.workDir, "core", "plugins", packDir, "node_modules", dep), {
       recursive: true,
@@ -165,13 +145,9 @@ for (const packDir of ["crm-pack", "customfields-pack"]) {
 // its own merged main, so the gate points at a written EMPTY baseline: the
 // file exists (the drift gate is visibly on, reading THIS path), it simply
 // records nothing, and the per-machine records in QWBE_DATA_DIR still catch
-// drift between runs. The staleness itself is reported, not hidden (QWB-52
-// review 19: the path must exist, not merely be named).
-// The two packs above came from their WORKING TREES (cpSync), not from a git ref:
-// they are the code under test, uncommitted edits included. So a run is a third
-// thing -- a committed kernel plus whatever the pack directories hold right now
-// -- and the log says so, instead of letting the kernel's hash imply that both
-// sides are pinned.
+// drift between runs. The staleness itself is reported, not hidden.
+// The packs come from their WORKING TREES (cpSync), not from a git ref: the code under test,
+// uncommitted edits included.
 const packState = (dir) => {
   try {
     const n = dirtyCount(dir)
@@ -183,7 +159,7 @@ const packState = (dir) => {
 }
 const packLine =
   "packs from the working tree (uncommitted edits INCLUDED): " +
-  `crm-pack ${packState(CONFIG.crmPack)}, customfields-pack ${packState(CONFIG.customFieldsPack)}`
+  `crm-pack ${packState(CONFIG.crmPack)}`
 log(`== ${packLine} ==`)
 // The written ledger carries the same line: a saved result cannot claim a
 // revision it did not run.
@@ -198,16 +174,7 @@ log("== install dependencies (qwbe core) ==")
 const npmEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("npm_config_")))
 execSync("npm ci --no-audit --no-fund --loglevel=error", { cwd: join(CONFIG.workDir, "core"), stdio: "inherit", env: /** @type {NodeJS.ProcessEnv} */ (npmEnv) })
 
-// A database of this run's own, never the developer's.
-//
-// Sharing the dev database is not only about stray rows: qwbe's logout drops
-// EVERY session of the account it is called for ("logout means everywhere",
-// core/src/cubes/auth/index.ts), and the session table lives in that database.
-// The logout scenario therefore signed the owner out of his own stack, from a
-// throwaway kernel on another port (measured 2026-08-31). The kernel already
-// ships the helper this needs, so the suite gets a fresh database and drops it
-// again at teardown. QWBE_DATABASE_URL still overrides, for a run that must
-// point somewhere specific.
+// A database of this run's own, never the developer's: qwbe logout is global per account.
 const { createTestDatabase } = await import(join(CONFIG.workDir, "core", "src", "pg", "test-db.ts"))
 const db = process.env.QWBE_DATABASE_URL
   ? { url: process.env.QWBE_DATABASE_URL, drop: async () => {} }
@@ -226,8 +193,8 @@ log(`== start qwbe on :${qwbePort} and frontend on :${fePort} (nohup, PIDs recor
 pids.push(
   nohup(
     `env QWBE_PORT=${qwbePort} QWBE_DATA_DIR=${CONFIG.dataDir} QWBE_ADMIN_PASSWORD=${CONFIG.password} ` +
-      // The merged platform stores every cube in one Postgres database
-      // (QWB-44/45); this run has its own, created above.
+      // The merged platform stores every cube in one Postgres database;
+      // this run has its own, created above.
       `QWBE_DATABASE_URL=${db.url} ` +
       // The committed cube-versions baseline inside the qwbe checkout is
       // currently stale against its own merged main (the account cube's
@@ -238,7 +205,7 @@ pids.push(
       `QWBE_CUBE_VERSIONS_BASELINE=${join(CONFIG.workDir, "empty-cube-versions.json")} ` +
       // The scratch data dir is deleted on every run, so the migration ownership
       // registry is empty at boot: the kernel refuses any declared dataMigration
-      // without a pre-ledger authorization (kernel ticket 08). The three legacy
+      // without a pre-ledger authorization. The three legacy
       // sources this pack declares are authorized here, exactly as the throwaway
       // bench in tools/import.test.mjs does.
       `QWBE_LEGACY_MIGRATIONS=contacts:crm-pack,contracts:crm-pack,crm/accounts:crm-pack ` +
@@ -265,7 +232,7 @@ try {
   log("== seed ==")
   api = await makeClient(qwbePort)
   seed = await seedUp(api, log)
-  // Runtime proof that the custom-value fold is ON (QWB-52 review 6): the
+  // Runtime proof that the custom-value fold is ON: the
   // effect dedup above is load-bearing, and a second `effect` instance turns
   // the fold off SILENTLY. This probe makes that failure loud instead of a
   // comment: define a field, PATCH a value through the TARGET cube's own API,
