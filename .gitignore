@@ -24,3 +24,7 @@ vtiger-export/
 
 # debugging leftovers, never commit
 .mockdb.tmp.*
+
+# agent session state and dated config backups (the git add -A incident, 2026-09-02)
+.pi/
+CLAUDE.md.bak-*
