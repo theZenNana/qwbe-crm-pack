@@ -27,7 +27,9 @@ import {
   listQueryString,
   renderKindOf,
   metadataApiPath,
+  OPENAPI_API_PATH,
   patchBodyOf,
+  recordApiPath,
   routeOf,
   saveCell,
   sortRequestFor,
@@ -118,6 +120,21 @@ describe("metadata paths", () => {
 
   it("reaches rows through the proxy under the cube's served prefix", () => {
     assert.equal(cubeApiPath("crm/contacts", "/ct-1"), "/api/qwbe/contacts/ct-1")
+  })
+
+  // QWB-55 Schema & API panel: every link stays on the same-origin proxy, the
+  // record id is ONE encoded segment (no traversal, no extra segments), and an
+  // empty id yields no link rather than the list endpoint.
+  it("builds panel links on the proxy with an encoded record id", () => {
+    assert.equal(recordApiPath("crm/organizations", "org-1"), "/api/qwbe/organizations/org-1")
+    assert.equal(recordApiPath("crm/organizations", "a/b"), "/api/qwbe/organizations/a%2Fb")
+    assert.equal(recordApiPath("crm/organizations", "../auth"), "/api/qwbe/organizations/..%2Fauth")
+    assert.equal(recordApiPath("crm/organizations", ""), null)
+    assert.equal(recordApiPath("crm/organizations", ".."), null)
+    assert.equal(OPENAPI_API_PATH, "/api/qwbe/openapi.json")
+    for (const href of [recordApiPath("crm/organizations", "x")!, metadataApiPath("crm/organizations"), OPENAPI_API_PATH]) {
+      assert.ok(href.startsWith("/api/qwbe/") && !href.includes("token") && !href.includes("http"))
+    }
   })
 })
 

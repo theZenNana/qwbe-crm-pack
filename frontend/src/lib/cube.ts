@@ -136,6 +136,23 @@ export function metadataApiPath(cube: string): string {
   return `/api/qwbe/catalog/${encodeURIComponent(cube)}/metadata`
 }
 
+// Proxy path of one record (GET /<leaf>/{id}). The id is one path segment, so
+// it is percent-encoded: an id carrying "/" must never become extra segments.
+// Returns null for an id that cannot name a record: empty (would resolve to
+// the LIST endpoint) or a bare "." / ".." (the browser folds those before the
+// request, and the proxy refuses a decoded ".." anyway).
+export function recordApiPath(cube: string, id: string): string | null {
+  if (id === "" || id === "." || id === "..") return null
+  return cubeApiPath(cube, `/${encodeURIComponent(id)}`)
+}
+
+// The kernel's one OpenAPI document (qwbe core/src/main.ts GatedOpenApi): the
+// complete spec across every mounted cube, served only to an authenticated
+// Bearer, hence through the same cookie proxy as every other call. There is
+// no per-cube spec and no documented anchor, so this is deliberately the
+// whole document with no invented query or fragment filter.
+export const OPENAPI_API_PATH = "/api/qwbe/openapi.json"
+
 // Builds the query string of a list request. Paging and sorting go to qwbe
 // (server-side paging end to end); there is no client-side slice anywhere.
 // A filter key that collides with a paging key is skipped rather than sent, so

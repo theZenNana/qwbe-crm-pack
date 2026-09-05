@@ -14,6 +14,7 @@ import Link from "next/link"
 
 import { CubeAdminEdit } from "@/components/cube-admin-edit"
 import { CubeList } from "@/components/cube-list"
+import { SchemaApiPanel } from "@/components/schema-api-panel"
 import { type FieldGroupSpec, routeOf } from "@/lib/cube"
 
 const ORGANIZATION_GROUPS: FieldGroupSpec[] = [
@@ -47,6 +48,7 @@ async function Detail({ id }: { id: Promise<{ id: string }> }) {
           All rows
         </Link>
       </section>
+      <SchemaApiPanel cube="crm/organizations" id={resolved} />
     </div>
   )
 }
