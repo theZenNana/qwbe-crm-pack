@@ -16,10 +16,14 @@
 // A field the metadata marks non-editable is displayed in both modes and
 // never becomes an input. Save PATCHes only the changed fields through the
 // provider; a refusal keeps the drafts on screen with qwbe's own message.
+// A pencil next to Copy opens ONE field in place (same form, same save path,
+// only that field can change); while a single-field draft is open the Edit
+// button and the other pencils are hidden, so a draft is never mixed with
+// "Edit all" or dropped silently. Escape cancels the single-field draft.
 
 import Link from "next/link"
-import { useEffect, useMemo, useState } from "react"
-import { CopyIcon } from "lucide-react"
+import { useEffect, useMemo, useRef, useState } from "react"
+import { CopyIcon, PencilIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import {
@@ -46,7 +50,13 @@ import {
   type FieldSection,
   type Row,
 } from "@/lib/cube.ts"
-import { changedPayloadOf, displayRowOf, initialValuesOf } from "@/lib/kit-form.ts"
+import {
+  changedPayloadOf,
+  displayRowOf,
+  fieldsInEditOf,
+  initialValuesOf,
+  type EditScope,
+} from "@/lib/kit-form.ts"
 import { cn } from "@/lib/utils"
 import { KitFieldInput } from "./field-input"
 import { relationRefsOf } from "@/lib/relation-batch.ts"
@@ -112,24 +122,34 @@ export function CubeKitShow({
     [sections],
   )
 
-  // In-place editing: the form mounts when Edit is pressed (so its defaults
-  // are the values shown at that moment) and unmounts on Save or Cancel,
-  // which is what discards unsaved drafts. A refusal leaves it mounted.
-  const [editing, setEditing] = useState(false)
+  // In-place editing: the form mounts when Edit (all fields) or a pencil (one
+  // field) is pressed, so its defaults are the values shown at that moment,
+  // and unmounts on Save or Cancel, which is what discards unsaved drafts. A
+  // refusal leaves it mounted. Only the fields in scope can change or travel.
+  const [editing, setEditing] = useState<EditScope>(null)
   const [refusal, setRefusal] = useState<string | null>(null)
   const [update, { isPending }] = useUpdate()
+  const fieldsInEdit = useMemo(() => fieldsInEditOf(editableFields, editing), [editableFields, editing])
   const initial = useMemo(
-    () => (flatRow ? initialValuesOf(editableFields, flatRow) : {}),
-    [editableFields, flatRow],
+    () => (flatRow ? initialValuesOf(fieldsInEdit, flatRow) : {}),
+    [fieldsInEdit, flatRow],
   )
 
   function cancel() {
+    const closed = editing
     setRefusal(null)
-    setEditing(false)
+    setEditing(null)
+    // Focus goes back to the pencil that opened a single field (it re-renders
+    // after the state change, hence the frame delay).
+    if (closed && closed !== "all") {
+      requestAnimationFrame(() => {
+        document.querySelector<HTMLElement>(`[data-edit-field="${CSS.escape(closed)}"]`)?.focus()
+      })
+    }
   }
 
   async function onSubmit(values: Record<string, string | boolean>) {
-    const { payload, missing } = changedPayloadOf(editableFields, initial, values)
+    const { payload, missing } = changedPayloadOf(fieldsInEdit, initial, values)
     if (missing.length > 0) {
       setRefusal(`Required: ${missing.join(", ")}`)
       return
@@ -149,7 +169,7 @@ export function CubeKitShow({
       toast.success("Saved")
       cancel()
     } catch (e: unknown) {
-      setRefusal(refusalTextOf(e, editableFields))
+      setRefusal(refusalTextOf(e, fieldsInEdit))
     }
   }
 
@@ -168,10 +188,53 @@ export function CubeKitShow({
           <span className="flex items-center gap-1">
             <span className="min-w-0 flex-1">{showValueOf(field, record, text)}</span>
             {text !== null && <CopyButton label={field.label} text={text} />}
+            {/* The pencil exists only while no draft is open: an open draft
+                must be saved or cancelled before another field or Edit all. */}
+            {editing === null && canEdit(field) && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-9 shrink-0 text-muted-foreground"
+                aria-label={`Edit ${field.label}`}
+                data-edit-field={field.name}
+                onClick={() => setEditing(field.name)}
+              >
+                <PencilIcon aria-hidden />
+              </Button>
+            )}
           </span>
         )
       }}
     />
+  )
+
+  // One field open in place: its kit input, focused, with its own Save/Cancel
+  // and the refusal right under it. Escape cancels this draft.
+  const single = (field: FieldMetadata) => (
+    <FocusOnMount
+      key={field.name}
+      className="flex min-w-0 flex-col gap-2"
+      onKeyDown={(e) => {
+        if (e.key === "Escape") {
+          e.preventDefault()
+          cancel()
+        }
+      }}
+    >
+      <KitFieldInput field={field} />
+      {refusal && (
+        <p role="alert" className="text-sm text-destructive">
+          {refusal}
+        </p>
+      )}
+      <div className="flex items-center gap-2">
+        <SaveButton label="Save" disabled={isPending} />
+        <Button type="button" variant="outline" disabled={isPending} onClick={cancel}>
+          Cancel
+        </Button>
+      </div>
+    </FocusOnMount>
   )
 
   const fieldsets = (cell: (field: FieldMetadata) => React.ReactNode) =>
@@ -185,7 +248,7 @@ export function CubeKitShow({
           <CardTitle className="text-2xl">{titleOf(meta, row as Row)}</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
-          {editing ? (
+          {editing === "all" ? (
             <Form defaultValues={initial} onSubmit={onSubmit} className="flex flex-col gap-4">
               <div className="flex flex-wrap items-center justify-end gap-2">
                 {refusal && (
@@ -208,11 +271,24 @@ export function CubeKitShow({
                 )}
               </RecordContextProvider>
             </Form>
+          ) : editing !== null ? (
+            <Form
+              // Same form and save path as Edit all, scoped to one field;
+              // the same key remount on scope change resets the defaults.
+              key={editing}
+              defaultValues={initial}
+              onSubmit={onSubmit}
+              className="flex flex-col gap-4"
+            >
+              <RecordContextProvider value={flatRow}>
+                {fieldsets((field) => (field.name === editing ? single(field) : shown(field)))}
+              </RecordContextProvider>
+            </Form>
           ) : (
             <>
               {editableFields.length > 0 && (
                 <div className="flex justify-end">
-                  <Button variant="outline" onClick={() => setEditing(true)}>
+                  <Button variant="outline" onClick={() => setEditing("all")}>
                     Edit
                   </Button>
                 </div>
@@ -222,6 +298,21 @@ export function CubeKitShow({
           )}
         </CardContent>
       </Card>
+    </div>
+  )
+}
+
+// Moves keyboard focus to the first focusable control inside on mount, so a
+// field opened with the pencil is ready to type into (the kit inputs do not
+// take an autoFocus prop).
+function FocusOnMount({ children, ...rest }: React.ComponentProps<"div">) {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    ref.current?.querySelector<HTMLElement>("input, select, textarea, [role=combobox], button")?.focus()
+  }, [])
+  return (
+    <div ref={ref} {...rest}>
+      {children}
     </div>
   )
 }

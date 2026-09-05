@@ -25,11 +25,28 @@ export type FieldMetadata = {
   custom: boolean
 }
 
+// The list query contract a cube publishes (qwbe core/src/metadata/schemas.ts
+// ListContract): what its list route actually honours. `search` names the fields
+// `q=` scans (PREFIX match, ORed together); `filters` names the fields accepted
+// as `<field>=<value>` EXACT match, relations always among them.
+export type ListContractMetadata = {
+  params: string[]
+  maxPageSize: number
+  defaultPageSize: number
+  search: string[]
+  filters: string[]
+  sort: string[]
+}
+
 export type CubeMetadata = {
   cube: string
   entity: string | null
   version: string | null
   schemaHash: string
+  // The published list contract. Optional in the type only so a response from a
+  // kernel that publishes nothing here still parses; every UI control derives
+  // from it when present (see listControlsOf).
+  list?: ListContractMetadata | null
   fields: FieldMetadata[]
 }
 
@@ -81,16 +98,33 @@ export function canDefineFields(permissions: ReadonlyArray<string>): boolean {
 // paging. `q` and `ids` are reserved for the same reason: qwbe's list contract
 // reads them itself (q scans the searchable fields, ids fetches a batch), so a
 // field of one of those names must not arrive as a bare filter key either.
-const RESERVED_QUERY_KEYS = new Set(["offset", "limit", "sortBy", "descending", "q", "ids"])
+// The fixed half of qwbe's list query (core/src/metadata/declarations.ts
+// ListParams -- the same keys the published contract lists under `params`). A
+// cube field with one of these names must never be sent as a bare filter key:
+// it would override paging, sorting or the q/ids scans.
+const RESERVED_QUERY_KEYS = new Set([
+  "offset",
+  "limit",
+  "sortBy",
+  "descending",
+  "page",
+  "pageSize",
+  "sort",
+  "q",
+  "ids",
+])
 
 export type ListParams = {
   offset?: number
   limit?: number
   sortBy?: string
   descending?: boolean
-  // Field filters (server-side equality, e.g. organizationId on contacts). Keys are
+  // Field filters (server-side exact equality, e.g. organizationId on contacts). Keys are
   // field NAMES from the metadata, never hard-coded per entity here.
   filters?: Record<string, string>
+  // Prefix search over the cube's declared search fields, as qwbe's list route
+  // reads `q` itself. First-class, never smuggled through `filters`.
+  q?: string
 }
 
 // The single first path segment a cube serves under. qwbe mounts a child cube
@@ -163,10 +197,43 @@ export function listQueryString(params: ListParams): string {
   if (params.limit !== undefined) q.set("limit", String(params.limit))
   if (params.sortBy !== undefined) q.set("sortBy", params.sortBy)
   if (params.descending) q.set("descending", "true")
+  if (params.q !== undefined && params.q !== "") q.set("q", params.q)
   for (const [field, value] of Object.entries(params.filters ?? {})) {
     if (value !== "" && !RESERVED_QUERY_KEYS.has(field)) q.set(field, value)
   }
   return q.toString()
+}
+
+// The filter and search controls a list offers, derived from the PUBLISHED list
+// contract. `search` is one prefix search sent as `q` (the contract's `search`
+// fields are scanned by the backend); `filters` are exact-equality fields the
+// backend accepts as `<field>=<value>`. A field the caller pins through
+// fixedFilters gets no control of its own, and a field named like a list
+// parameter is never admitted as a filter.
+// Without a published contract (an older kernel) the fallback is the field
+// flags: searchable fields as exact filters, no q.
+export type ListControls = {
+  search: boolean
+  filters: FieldMetadata[]
+}
+
+export function listControlsOf(
+  fields: FieldMetadata[],
+  list: ListContractMetadata | null | undefined,
+  fixedFilters: Readonly<Record<string, string>> = {},
+): ListControls {
+  const byName = new Map(fields.map((f) => [f.name, f]))
+  const pinned = new Set(Object.keys(fixedFilters))
+  const pick = (names: string[]): FieldMetadata[] =>
+    names
+      .filter((n) => !pinned.has(n) && !RESERVED_QUERY_KEYS.has(n))
+      .map((n) => byName.get(n))
+      .filter((f): f is FieldMetadata => f !== undefined)
+  if (list) return { search: list.search.length > 0, filters: pick(list.filters) }
+  return {
+    search: false,
+    filters: pick(fields.filter((f) => f.searchable).map((f) => f.name)),
+  }
 }
 
 export function listApiPath(cube: string, params: ListParams): string {

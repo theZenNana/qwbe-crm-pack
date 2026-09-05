@@ -9,6 +9,7 @@ import { describe, it } from "node:test"
 import {
   changedPayloadOf,
   displayRowOf,
+  fieldsInEditOf,
   initialValuesOf,
   updatePayloadOf,
 } from "./kit-form.ts"
@@ -196,5 +197,24 @@ describe("read-only and runtime fields through the renderer's derivation", () =>
     const initial = initialValuesOf(editable, displayRowOf(meta, row))
     assert.deepEqual(changedPayloadOf(editable, initial, { ...initial, cui: "RO2" }).payload, { cui: "RO2" })
     assert.deepEqual(changedPayloadOf(editable, initial, { ...initial, cui: "" }).payload, { cui: null })
+  })
+})
+
+describe("fieldsInEditOf (pencil scope)", () => {
+  const editable = [field(), field({ name: "cui", label: "CUI", nullable: true, required: false })]
+
+  it("scopes the form to nothing, everything, or exactly the pencilled field", () => {
+    assert.deepEqual(fieldsInEditOf(editable, null), [])
+    assert.deepEqual(fieldsInEditOf(editable, "all"), editable)
+    assert.deepEqual(fieldsInEditOf(editable, "cui").map((f) => f.name), ["cui"])
+    assert.deepEqual(fieldsInEditOf(editable, "not-editable"), [])
+  })
+
+  it("a single-field draft persists only that field even if the form carries others", () => {
+    const scoped = fieldsInEditOf(editable, "cui")
+    const initial = initialValuesOf(scoped, { name: "Ada", cui: "RO1" })
+    const { payload, missing } = changedPayloadOf(scoped, initial, { ...initial, cui: "RO2", name: "Changed" })
+    assert.deepEqual(payload, { cui: "RO2" })
+    assert.deepEqual(missing, [])
   })
 })

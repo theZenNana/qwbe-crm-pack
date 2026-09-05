@@ -30,6 +30,7 @@ import {
   hrefForRelation,
   rowHref,
   listApiPath,
+  listControlsOf,
   metadataApiPath,
   pageWindow,
   saveCell,
@@ -97,9 +98,11 @@ export function CubeList({
   const [pageSize, setPageSize] = useState(PAGE_SIZES[0])
   const [sortBy, setSortBy] = useState<string | undefined>(undefined)
   const [descending, setDescending] = useState(false)
-  // The chosen values of the searchable fields, keyed by field name; empty
+  // The chosen values of the exact filter fields, keyed by field name; empty
   // string means "all".
   const [search, setSearch] = useState<Record<string, string>>({})
+  // The prefix search over the cube's declared search fields, sent as `q`.
+  const [prefix, setPrefix] = useState("")
   const [edit, setEdit] = useState<EditState | null>(null)
   // Per-cell error messages from a failed PATCH, keyed "id:field".
   const [cellErrors, setCellErrors] = useState<Record<string, string>>({})
@@ -135,13 +138,23 @@ export function CubeList({
     }
   }, [cube])
 
+  // The filter/search controls derive from the PUBLISHED list contract, so the
+  // UI can only offer what the backend actually honours: one prefix search as
+  // `q` when the contract names search fields, exact filters from the
+  // contract's filter list (relations included, fixed-filtered fields and
+  // reserved parameter names excluded).
+  const controls = useMemo(
+    () => (meta ? listControlsOf(meta.fields, meta.list, fixedFilters ?? {}) : null),
+    [meta, fixedFilters],
+  )
+
   const filters = useMemo<Record<string, string>>(() => {
     const chosen: Record<string, string> = {}
-    for (const f of meta?.fields ?? []) {
-      if (f.searchable && search[f.name]) chosen[f.name] = search[f.name]
+    for (const f of controls?.filters ?? []) {
+      if (search[f.name]) chosen[f.name] = search[f.name]
     }
     return { ...(fixedFilters ?? {}), ...chosen }
-  }, [fixedFilters, search, meta])
+  }, [fixedFilters, search, controls])
   const effectiveFilters = useMemo(
     () => Object.fromEntries(Object.entries(filters).filter(([, v]) => v !== "")),
     [filters],
@@ -149,7 +162,16 @@ export function CubeList({
 
   const load = useCallback(() => {
     let alive = true
-    apiFetch(listApiPath(cube, { offset, limit: pageSize, sortBy, descending, filters: effectiveFilters }))
+    apiFetch(
+      listApiPath(cube, {
+        offset,
+        limit: pageSize,
+        sortBy,
+        descending,
+        ...(prefix === "" ? {} : { q: prefix }),
+        filters: effectiveFilters,
+      }),
+    )
       .then(async (r) => {
         if (!r.ok) throw new Error(`list request failed: ${r.status}`)
         return (await r.json()) as PageOf<Row>
@@ -163,7 +185,7 @@ export function CubeList({
     return () => {
       alive = false
     }
-  }, [cube, offset, pageSize, sortBy, descending, effectiveFilters])
+  }, [cube, offset, pageSize, sortBy, descending, prefix, effectiveFilters])
 
   useEffect(() => load(), [load])
 
@@ -205,7 +227,6 @@ export function CubeList({
   // on the detail page). When this app has a route for the cube, the title
   // cell links to the row's detail page; the other cells stay inline-editable.
   const titleFieldName = meta.fields.find((f) => f.required)?.name
-  const searchableFields = meta.fields.filter((f) => f.searchable)
   const total = page?.total
   const rowCount = page?.rows.length ?? 0
   const { currentPage, lastPage } = pageWindow(offset, pageSize, total)
@@ -268,35 +289,46 @@ export function CubeList({
 
   return (
     <div className="flex flex-col gap-4">
-      {/* One toolbar: the search fields wrap on a narrow screen, the Add
-          action keeps the trailing edge (no separate row per control). */}
-      {(createHref || searchableFields.some((f) => !fixedFilters?.[f.name])) && (
+      {/* One toolbar: the prefix search and the exact filter fields wrap on a
+          narrow screen, the Add action keeps the trailing edge (no separate
+          row per control). A field the caller pins (fixedFilters) gets no
+          control here -- it is already applied server-side. */}
+      {controls && (createHref || controls.search || controls.filters.length > 0) && (
       <div className="flex flex-wrap items-end gap-3">
-      {searchableFields
-        .filter((f) => !fixedFilters?.[f.name])
-        .map((f) =>
-          f.relation ? (
-            <RelationTypeahead
-              key={f.name}
-              field={f}
-              value={search[f.name] ?? ""}
-              onChange={(v) => {
-                requery(() => setSearch((s) => ({ ...s, [f.name]: v })))
-                setOffset(0)
-              }}
-            />
-          ) : (
-            <TextSearch
-              key={f.name}
-              field={f}
-              value={search[f.name] ?? ""}
-              onChange={(v) => {
-                requery(() => setSearch((s) => ({ ...s, [f.name]: v })))
-                setOffset(0)
-              }}
-            />
-          ),
-        )}
+      {controls.search && (
+        <TextSearch
+          label="Search"
+          ariaLabel="Search (prefix match)"
+          value={prefix}
+          onChange={(v) => {
+            requery(() => setPrefix(v))
+            setOffset(0)
+          }}
+        />
+      )}
+      {controls.filters.map((f) =>
+        f.relation ? (
+          <RelationTypeahead
+            key={f.name}
+            field={f}
+            value={search[f.name] ?? ""}
+            onChange={(v) => {
+              requery(() => setSearch((s) => ({ ...s, [f.name]: v })))
+              setOffset(0)
+            }}
+          />
+        ) : (
+          <TextSearch
+            key={f.name}
+            label={f.label}
+            value={search[f.name] ?? ""}
+            onChange={(v) => {
+              requery(() => setSearch((s) => ({ ...s, [f.name]: v })))
+              setOffset(0)
+            }}
+          />
+        ),
+      )}
       {createHref && (
         <Button asChild className="ml-auto">
           <Link href={createHref}>{addLabel}</Link>
@@ -458,8 +490,10 @@ export function CubeList({
   )
 }
 
-// A searchable field the backend serves by exact equality. A text field gets a
-// text input; the value travels as the field's filter value.
+// A text filter control. For an exact-equality field the label names the
+// field; for the prefix search it is the bare "Search" the q contract owns.
+// The exact case is labeled, so a user is not misled into thinking the value
+// matches anywhere inside the field.
 //
 // The keystrokes stay local and only the pause reaches qwbe: the filter is an
 // exact-equality match, so every prefix of a word ("A", "Ac", "Acm") is a
@@ -468,11 +502,13 @@ export function CubeList({
 const FILTER_PAUSE_MS = 300
 
 function TextSearch({
-  field,
+  label,
+  ariaLabel,
   value,
   onChange,
 }: {
-  field: FieldMetadata
+  label: string
+  ariaLabel?: string
   value: string
   onChange: (value: string) => void
 }) {
@@ -484,10 +520,10 @@ function TextSearch({
   }, [])
   return (
     <div className="flex w-full flex-col gap-1 sm:w-auto">
-      <span className="text-xs font-medium text-muted-foreground">{field.label}</span>
+      <span className="text-xs font-medium text-muted-foreground">{label}</span>
       <Input
         className="w-full sm:w-64"
-        aria-label={`Filter by ${field.label}`}
+        aria-label={ariaLabel ?? `Filter by ${label} (exact match)`}
         value={draft}
         onChange={(e) => {
           const next = e.target.value

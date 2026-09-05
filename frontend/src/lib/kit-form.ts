@@ -87,6 +87,21 @@ export function updatePayloadOf(
   return { payload, missing }
 }
 
+// What the in-place form is editing: nothing, every editable field ("all",
+// the Edit button), or exactly one field by name (its pencil). The form's
+// defaults, diff and refusal mapping all take the scoped list, so a single
+// field draft can never carry or change another field.
+export type EditScope = "all" | string | null
+
+export function fieldsInEditOf(
+  editable: readonly FieldMetadata[],
+  scope: EditScope,
+): readonly FieldMetadata[] {
+  if (scope === null) return []
+  if (scope === "all") return editable
+  return editable.filter((f) => f.name === scope)
+}
+
 // The in-place form's save body: updatePayloadOf restricted to the fields
 // whose value differs from what the form started with, so an untouched field
 // is never re-sent (and never re-validated server-side). An unchanged

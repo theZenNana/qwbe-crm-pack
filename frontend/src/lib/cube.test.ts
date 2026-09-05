@@ -23,6 +23,7 @@ import {
   hrefForRelation,
   rowHref,
   listApiPath,
+  listControlsOf,
   listQueryString,
   renderKindOf,
   metadataApiPath,
@@ -108,6 +109,74 @@ describe("list request parameters", () => {
     )
     assert.equal(parsed.get("limit"), "50")
     assert.equal(parsed.get("sortBy"), "name")
+  })
+
+  it("sends the prefix search as q, a first-class list parameter", () => {
+    const parsed = new URLSearchParams(listQueryString({ q: "Ac", filters: { type: "Customer" } }))
+    assert.equal(parsed.get("q"), "Ac")
+    assert.equal(parsed.get("type"), "Customer")
+    // An empty q travels nowhere.
+    assert.equal(listQueryString({ q: "" }), "")
+  })
+
+  it("a field named q or sort never travels as a bare filter key", () => {
+    const parsed = new URLSearchParams(
+      listQueryString({ q: "Ac", filters: { q: "injected", sort: "evil", page: "9", pageSize: "1" } }),
+    )
+    assert.equal(parsed.get("q"), "Ac")
+    assert.equal(parsed.get("sort"), null)
+    assert.equal(parsed.get("page"), null)
+    assert.equal(parsed.get("pageSize"), null)
+  })
+})
+
+describe("list controls from the published contract", () => {
+  const orgField = field({ name: "organizationId", label: "Organization", relation: { target: "crm/organizations", entity: "Organization", summary: null } })
+  const nameField = field({ name: "name", label: "Name", searchable: true, required: true })
+  const emailField = field({ name: "email", label: "Email", searchable: true })
+  const contract = {
+    params: ["offset", "limit", "sortBy", "descending", "page", "pageSize", "sort", "q", "ids"],
+    maxPageSize: 200,
+    defaultPageSize: 25,
+    search: ["name", "email"],
+    filters: ["email", "name", "organizationId"],
+    sort: ["name", "email"],
+  }
+  const fields = [nameField, emailField, orgField]
+
+  it("derives one prefix search and the exact filters from the contract", () => {
+    const c = listControlsOf(fields, contract)
+    assert.equal(c.search, true)
+    // Relations are filters by construction (the contract lists them).
+    assert.deepEqual(c.filters.map((f) => f.name), ["email", "name", "organizationId"])
+  })
+
+  it("no contract search fields means no q control", () => {
+    const c = listControlsOf(fields, { ...contract, search: [] })
+    assert.equal(c.search, false)
+    assert.equal(c.filters.length, 3)
+  })
+
+  it("a fixed-filtered field gets no control of its own", () => {
+    const c = listControlsOf(fields, contract, { organizationId: "org-9" })
+    assert.deepEqual(c.filters.map((f) => f.name), ["email", "name"])
+  })
+
+  it("a field named like a list parameter is never admitted as a filter", () => {
+    const sneaky = [...fields, field({ name: "page", label: "Page", searchable: true })]
+    const c = listControlsOf(sneaky, { ...contract, filters: [...contract.filters, "page"] })
+    assert.equal(c.filters.some((f) => f.name === "page"), false)
+  })
+
+  it("a contract name the metadata does not publish is skipped", () => {
+    const c = listControlsOf(fields, { ...contract, filters: [...contract.filters, "ghost"] })
+    assert.equal(c.filters.some((f) => f.name === "ghost"), false)
+  })
+
+  it("without a contract it falls back to the searchable flags, no q", () => {
+    const c = listControlsOf(fields, null)
+    assert.equal(c.search, false)
+    assert.deepEqual(c.filters.map((f) => f.name), ["name", "email"])
   })
 })
 
