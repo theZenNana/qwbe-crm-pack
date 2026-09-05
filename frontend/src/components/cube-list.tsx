@@ -268,13 +268,10 @@ export function CubeList({
 
   return (
     <div className="flex flex-col gap-4">
-      {createHref && (
-        <div className="flex justify-end">
-          <Button asChild>
-            <Link href={createHref}>{addLabel}</Link>
-          </Button>
-        </div>
-      )}
+      {/* One toolbar: the search fields wrap on a narrow screen, the Add
+          action keeps the trailing edge (no separate row per control). */}
+      {(createHref || searchableFields.some((f) => !fixedFilters?.[f.name])) && (
+      <div className="flex flex-wrap items-end gap-3">
       {searchableFields
         .filter((f) => !fixedFilters?.[f.name])
         .map((f) =>
@@ -300,6 +297,13 @@ export function CubeList({
             />
           ),
         )}
+      {createHref && (
+        <Button asChild className="ml-auto">
+          <Link href={createHref}>{addLabel}</Link>
+        </Button>
+      )}
+      </div>
+      )}
       {listError && <p role="alert">{listError}</p>}
       {page && page.rows.length === 0 ? (
         // The empty state replaces the silent empty table. A
@@ -320,15 +324,16 @@ export function CubeList({
           </div>
         )
       ) : (
-      <Table>
+      <Table aria-label={`${meta.entity ?? cube} list`}>
         <TableHeader>
           <TableRow>
             {columns.map((column) => (
-              <TableHead key={column.field.name}>
+              <TableHead key={column.field.name} className="whitespace-nowrap">
                 {column.sortable ? (
                   <Button
                     variant="ghost"
                     size="sm"
+                    className="-ml-3"
                     onClick={() => toggleSort(column)}
                     aria-sort={sortBy === column.field.name ? (descending ? "descending" : "ascending") : "none"}
                   >
@@ -336,7 +341,7 @@ export function CubeList({
                     {sortBy === column.field.name ? (descending ? " ↓" : " ↑") : ""}
                   </Button>
                 ) : (
-                  column.field.label
+                  <span className="text-sm font-medium">{column.field.label}</span>
                 )}
               </TableHead>
             ))}
@@ -356,7 +361,7 @@ export function CubeList({
           {page?.rows.map((row) => (
             <TableRow key={String(row.id)}>
               {columns.map((column) => (
-                <TableCell key={column.field.name}>
+                <TableCell key={column.field.name} className="align-top">
                   <Cell
                     row={row}
                     column={column}
@@ -377,15 +382,15 @@ export function CubeList({
       </Table>
       )}
       {(!page || page.rows.length > 0) && (
-      <div className="flex items-center justify-between">
-        <span className="text-sm text-muted-foreground">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <span className="text-sm text-muted-foreground" aria-live="polite">
           {page
             ? total !== undefined
               ? `${page.offset + 1}-${page.offset + rowCount} of ${total}`
               : `${page.offset + 1}-${page.offset + rowCount}`
             : "loading"}
         </span>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Button
             variant="outline"
             size="sm"
@@ -478,10 +483,10 @@ function TextSearch({
     if (timer.current) clearTimeout(timer.current)
   }, [])
   return (
-    <div className="flex items-center gap-2">
-      <span className="text-sm text-muted-foreground">{field.label}</span>
+    <div className="flex w-full flex-col gap-1 sm:w-auto">
+      <span className="text-xs font-medium text-muted-foreground">{field.label}</span>
       <Input
-        className="w-64"
+        className="w-full sm:w-64"
         aria-label={`Filter by ${field.label}`}
         value={draft}
         onChange={(e) => {
@@ -593,7 +598,7 @@ function Cell({
   // cell, keep the full value in the title tooltip.
   const textValue = value === null || value === undefined ? null : String(value)
   const cellText = (node: React.ReactNode) => (
-    <span className="block max-w-48 truncate" title={textValue ?? undefined}>
+    <span className="block max-w-56 truncate sm:max-w-72" title={textValue ?? undefined}>
       {node}
     </span>
   )
@@ -658,13 +663,13 @@ function Cell({
           {content}
         </RelationLink>
       ) : isTitle && rowLink ? (
-        <Link className="underline" href={rowLink}>
+        <Link className="underline" href={rowLink} title={textValue ?? undefined}>
           {content}
         </Link>
       ) : editable ? (
         <button
           type="button"
-          className="cursor-text text-left"
+          className="min-h-9 cursor-text rounded-sm text-left hover:bg-muted/50 focus-visible:outline-2 focus-visible:outline-ring"
           title={`Edit ${field.label}`}
           // The accessible name must say what the button does; the cell value
           // alone left a screen reader no way to find the edit affordance.

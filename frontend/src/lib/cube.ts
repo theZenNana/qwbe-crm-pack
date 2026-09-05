@@ -377,10 +377,13 @@ export function createPayloadOf(
 
 // A fieldset of a detail page: a legend and the field NAMES it groups, in
 // display order. Names only -- labels, types and editability still come from
-// the metadata, so this is a layout hint, not a second schema.
-export type FieldGroupSpec = { legend: string; fields: string[] }
+// the metadata, so this is a layout hint, not a second schema. `important`
+// is a presentation emphasis for the page's primary section (a border accent
+// plus a textual "Important" marker, never color alone); it says nothing
+// about the data and is never derived from it.
+export type FieldGroupSpec = { legend: string; fields: string[]; important?: boolean }
 
-export type FieldSection = { legend: string; fields: FieldMetadata[] }
+export type FieldSection = { legend: string; fields: FieldMetadata[]; important?: boolean }
 
 // Distributes the published fields over the caller's groups by name. A name
 // the metadata does not publish is skipped (the field was removed or renamed
@@ -388,7 +391,7 @@ export type FieldSection = { legend: string; fields: FieldMetadata[] }
 // leftovers land in "Other", runtime custom fields in "Custom fields" -- so a
 // custom field defined tomorrow shows up without a frontend change. Empty
 // groups render nothing.
-export function groupFields(fields: FieldMetadata[], groups: FieldGroupSpec[]): FieldSection[] {
+export function groupFields(fields: FieldMetadata[], groups: readonly FieldGroupSpec[]): FieldSection[] {
   const byName = new Map(fields.map((f) => [f.name, f]))
   const placed = new Set<string>()
   const sections: FieldSection[] = []
@@ -401,7 +404,9 @@ export function groupFields(fields: FieldMetadata[], groups: FieldGroupSpec[]): 
         placed.add(name)
       }
     }
-    if (chosen.length > 0) sections.push({ legend: group.legend, fields: chosen })
+    if (chosen.length > 0) {
+      sections.push({ legend: group.legend, fields: chosen, ...(group.important ? { important: true } : {}) })
+    }
   }
   const rest = fields.filter((f) => !placed.has(f.name))
   const other = rest.filter((f) => !f.custom)
@@ -420,30 +425,6 @@ export function withSavedValue(row: Row, field: FieldMetadata, value: unknown): 
   return field.custom
     ? { ...row, custom: { ...((row.custom as Row | undefined) ?? {}), [field.name]: value } }
     : { ...row, [field.name]: value }
-}
-
-// The react-hook-form path of a field in the admin-kit form (QWB-53): a
-// static field is a top-level key, a custom field lives under `custom`, the
-// same place customValueOf reads it from -- so the form's values ARE a row.
-export function formSourceOf(field: FieldMetadata): string {
-  return field.custom ? `custom.${field.name}` : field.name
-}
-
-// The PATCH body of one form submit: ONLY the editable keys whose value
-// changed, each coerced by the rule the inline editor saves with, a custom
-// field's value read from the form's `custom` sub-object and sent flat (the
-// kernel folds it back and validates it against the definition). Nothing
-// the metadata marks non-editable is ever sent, so bookkeeping columns can
-// never be overwritten from the form.
-export function patchBodyOf(fields: FieldMetadata[], previous: Row, next: Row): Row {
-  const body: Row = {}
-  for (const field of fields) {
-    if (!canEdit(field)) continue
-    const raw = customValueOf(next, field)
-    const value = coerce(field, raw === null || raw === undefined ? "" : String(raw))
-    if ((value ?? null) !== (customValueOf(previous, field) ?? null)) body[field.name] = value
-  }
-  return body
 }
 
 export type SaveResult =

@@ -47,22 +47,6 @@ const eslintConfig = defineConfig([
       ],
     },
   },
-  {
-    // Vendored shadcn-admin-kit sources (QWB-53): kept verbatim from the
-    // MIT package, so they follow the kit's own lint conventions. Unused
-    // `_`-prefixed destructures are the kit's way of dropping props, its
-    // create-suggestion hook reads a ref during render, and its files carry
-    // a react-refresh directive this config has no plugin for.
-    files: ["src/components/admin-kit/**/*.{ts,tsx}"],
-    rules: {
-      "@typescript-eslint/no-unused-vars": [
-        "warn",
-        { varsIgnorePattern: "^_", argsIgnorePattern: "^_" },
-      ],
-      "react-hooks/refs": "off",
-    },
-    linterOptions: { reportUnusedDisableDirectives: "off" },
-  },
   // Override default ignores of eslint-config-next.
   globalIgnores([
     // Default ignores of eslint-config-next:

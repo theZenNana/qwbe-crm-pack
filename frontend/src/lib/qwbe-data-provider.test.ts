@@ -1,95 +1,123 @@
-// The admin-kit pilot's data provider (QWB-53), against a stubbed fetch: the
-// two verbs hit the proxy paths the rest of the app uses, update PATCHes only
-// the edited keys, and a refusal becomes the field-keyed body.errors that
-// ra-core puts under the inputs -- with qwbe's own message.
+// Unit tests for the qwbe data provider (QWB-53 / QWB-54, merged). qwbe is
+// stubbed at the HTTP boundary: every test asserts the exact request the
+// provider sends (method, proxy path, query) and how qwbe's own response or
+// refusal maps back -- including the field-keyed body.errors ra-core's forms
+// read, with qwbe's own message.
 
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
-import type { FieldMetadata, Row } from "./cube.ts"
 import { fieldErrorsOf, qwbeDataProvider } from "./qwbe-data-provider.ts"
 
-const field = (over: Partial<FieldMetadata> = {}): FieldMetadata => ({
-  name: "name",
-  label: "Name",
-  type: "string",
-  required: false,
-  editable: true,
-  sortable: true,
-  searchable: false,
-  nullable: false,
-  enum: null,
-  relation: null,
-  custom: false,
-  ...over,
-})
+// A stub fetch that records the request and answers from a queue.
+function stubFetch(responder: (url: string, init?: RequestInit) => unknown | Response) {
+  const requests: { url: string; init?: RequestInit }[] = []
+  const doFetch: typeof fetch = async (input, init) => {
+    const url = String(input)
+    requests.push({ url, init })
+    const answer = responder(url, init)
+    const response =
+      answer instanceof Response ? answer : new Response(JSON.stringify(answer), { status: 200 })
+    return response
+  }
+  return { doFetch, requests }
+}
 
-const fields = [
-  field({ name: "id", editable: false }),
-  field({ name: "name", required: true }),
-  field({ name: "tva", type: "boolean", custom: true }),
-]
-
-const calls: Array<{ url: string; init?: RequestInit }> = []
-const stub =
-  (respond: (url: string, init?: RequestInit) => Response) =>
-  (async (url: RequestInfo | URL, init?: RequestInit) => {
-    calls.push({ url: String(url), init })
-    return respond(String(url), init)
-  }) as unknown as typeof fetch
-
-const row: Row = { id: "org-1", name: "Acme", custom: { tva: false } }
+const row = { id: "con_1", name: "Ada" }
+const pageOf = (rows: unknown[], total?: number) => ({ rows, offset: 0, limit: 25, total })
 
 describe("qwbeDataProvider", () => {
-  it("getOne reads the row through the proxy", async () => {
-    calls.length = 0
-    const dp = qwbeDataProvider("crm/organizations", fields, stub(() => Response.json(row)))
-    const { data } = await dp.getOne("organizations", { id: "org-1" })
-    assert.deepEqual(data, row)
-    assert.equal(calls[0].url, "/api/qwbe/organizations/org-1")
-    assert.equal(calls[0].init?.method ?? "GET", "GET")
-  })
-
-  it("update PATCHes only the edited keys, a custom one flat, and returns the saved row", async () => {
-    calls.length = 0
-    const saved = { ...row, name: "Acme SRL", custom: { tva: true } }
-    const dp = qwbeDataProvider("crm/organizations", fields, stub(() => Response.json(saved)))
-    const { data } = await dp.update("organizations", {
-      id: "org-1",
-      previousData: row,
-      data: { ...row, id: "tampered", name: "Acme SRL", custom: { tva: true } },
+  it("getList maps ra-core paging and sort onto qwbe's list contract", async () => {
+    const { doFetch, requests } = stubFetch(() => pageOf([row], 7))
+    const provider = qwbeDataProvider(doFetch)
+    const result = await provider.getList("crm/contacts", {
+      pagination: { page: 3, perPage: 25 },
+      sort: { field: "name", order: "DESC" },
+      filter: { organizationId: "org_1" },
     })
-    assert.deepEqual(data, saved)
-    assert.equal(calls.length, 1)
-    assert.equal(calls[0].url, "/api/qwbe/organizations/org-1")
-    assert.equal(calls[0].init?.method, "PATCH")
-    assert.deepEqual(JSON.parse(String(calls[0].init?.body)), { name: "Acme SRL", tva: true })
+    assert.deepEqual(result, { data: [row], total: 7 })
+    assert.equal(requests[0].url, "/api/qwbe/contacts?offset=50&limit=25&sortBy=name&descending=true&organizationId=org_1")
   })
 
-  it("update with nothing changed sends no request", async () => {
-    calls.length = 0
-    const dp = qwbeDataProvider("crm/organizations", fields, stub(() => Response.json(row)))
-    const { data } = await dp.update("organizations", { id: "org-1", previousData: row, data: { ...row } })
-    assert.deepEqual(data, row)
-    assert.equal(calls.length, 0)
+  it("getList maps ra-core's default id sort to no sort parameter at all", async () => {
+    const { doFetch, requests } = stubFetch(() => pageOf([row]))
+    const provider = qwbeDataProvider(doFetch)
+    await provider.getList("crm/contacts", {
+      pagination: { page: 1, perPage: 25 },
+      sort: { field: "id", order: "ASC" },
+      filter: {},
+    })
+    assert.equal(requests[0].url, "/api/qwbe/contacts?offset=0&limit=25")
+  })
+
+  it("getOne asks the row endpoint through the proxy", async () => {
+    const { doFetch, requests } = stubFetch(() => row)
+    const provider = qwbeDataProvider(doFetch)
+    assert.deepEqual(await provider.getOne("crm/contacts", { id: "con_1" }), { data: row })
+    assert.equal(requests[0].url, "/api/qwbe/contacts/con_1")
+    assert.equal(requests[0].init?.method ?? "GET", "GET")
+  })
+
+  it("getOne encodes the id as one path segment", async () => {
+    const { doFetch, requests } = stubFetch(() => row)
+    await qwbeDataProvider(doFetch).getOne("crm/organizations", { id: "a/b" })
+    assert.equal(requests[0].url, "/api/qwbe/organizations/a%2Fb")
+  })
+
+  it("getMany sends one ids batch, deduplicated, with no limit", async () => {
+    const { doFetch, requests } = stubFetch(() => pageOf([row]))
+    const provider = qwbeDataProvider(doFetch)
+    const result = await provider.getMany("crm/organizations", { ids: ["org_2", "org_1", "org_2"] })
+    assert.deepEqual(result, { data: [row] })
+    assert.equal(requests[0].url, "/api/qwbe/organizations?ids=org_2%2Corg_1")
+  })
+
+  it("getMany with no ids asks nothing", async () => {
+    const { doFetch, requests } = stubFetch(() => pageOf([]))
+    const provider = qwbeDataProvider(doFetch)
+    assert.deepEqual(await provider.getMany("crm/organizations", { ids: [] }), { data: [] })
+    assert.equal(requests.length, 0)
+  })
+
+  it("update PATCHes exactly the body it is given and maps the stored row back", async () => {
+    const saved = { ...row, name: "Grace", custom: { tva: true } }
+    const { doFetch, requests } = stubFetch(() => saved)
+    const provider = qwbeDataProvider(doFetch)
+    const result = await provider.update("crm/contacts", {
+      id: "con_1",
+      // A custom value travels flat (the kernel folds it into `custom`).
+      data: { name: "Grace", tva: true },
+      previousData: row,
+    })
+    assert.deepEqual(result, { data: saved })
+    assert.equal(requests.length, 1)
+    assert.equal(requests[0].init?.method, "PATCH")
+    assert.equal(requests[0].url, "/api/qwbe/contacts/con_1")
+    assert.equal(requests[0].init?.body, JSON.stringify({ name: "Grace", tva: true }))
+  })
+
+  it("update with an empty body sends no request and keeps the row", async () => {
+    const { doFetch, requests } = stubFetch(() => row)
+    const provider = qwbeDataProvider(doFetch)
+    const result = await provider.update("crm/contacts", { id: "con_1", data: {}, previousData: row })
+    assert.deepEqual(result, { data: row })
+    assert.equal(requests.length, 0)
   })
 
   it("a refused PATCH throws qwbe's message with the per-field errors ra-core expects", async () => {
-    const dp = qwbeDataProvider(
-      "crm/organizations",
-      fields,
-      stub(() =>
-        Response.json(
-          {
-            issues: [{ _tag: "Refinement", path: ["name"], message: 'Expected a non empty string, actual ""' }],
+    const { doFetch } = stubFetch(
+      () =>
+        new Response(
+          JSON.stringify({
             message: "OrganizationPatch refused",
-          },
+            issues: [{ _tag: "Refinement", path: ["name"], message: 'Expected a non empty string, actual ""' }],
+          }),
           { status: 400 },
         ),
-      ),
     )
+    const provider = qwbeDataProvider(doFetch)
     await assert.rejects(
-      dp.update("organizations", { id: "org-1", previousData: row, data: { ...row, name: "" } }),
+      provider.update("crm/contacts", { id: "con_1", data: { name: "" }, previousData: row }),
       (e: unknown) => {
         const err = e as { message: string; status: number; body: { errors: Record<string, string> } }
         assert.equal(err.status, 400)
@@ -100,24 +128,28 @@ describe("qwbeDataProvider", () => {
     )
   })
 
-  it("a refusal without issues carries no field errors, only the message", async () => {
-    const dp = qwbeDataProvider(
-      "crm/organizations",
-      fields,
-      stub(() => new Response("forbidden", { status: 403 })),
-    )
-    await assert.rejects(dp.getOne("organizations", { id: "org-1" }), (e: unknown) => {
+  it("a non-JSON refusal keeps the text as the message and carries no field errors", async () => {
+    const { doFetch } = stubFetch(() => new Response("kernel gone", { status: 503 }))
+    const provider = qwbeDataProvider(doFetch)
+    await assert.rejects(provider.getOne("crm/contacts", { id: "con_1" }), (e: unknown) => {
       const err = e as { message: string; status: number; body: { errors: Record<string, string> } }
-      assert.equal(err.status, 403)
-      assert.equal(err.message, "forbidden")
+      assert.equal(err.status, 503)
+      assert.equal(err.message, "kernel gone")
       assert.deepEqual(err.body.errors, {})
       return true
     })
   })
 
-  it("the verbs the pilot does not need refuse loudly instead of guessing a path", async () => {
-    const dp = qwbeDataProvider("crm/organizations", fields, stub(() => Response.json(row)))
-    await assert.rejects(dp.delete("organizations", { id: "org-1" }), /delete is not supported/)
+  it("create POSTs the body to the cube's list path", async () => {
+    const { doFetch, requests } = stubFetch(() => row)
+    await qwbeDataProvider(doFetch).create("crm/contacts", { data: { name: "Ada" } })
+    assert.equal(requests[0].init?.method, "POST")
+    assert.equal(requests[0].url, "/api/qwbe/contacts")
+  })
+
+  it("delete is refused: qwbe has no DELETE endpoints", async () => {
+    const provider = qwbeDataProvider(async () => new Response("{}", { status: 200 }))
+    await assert.rejects(provider.delete("crm/contacts", { id: "con_1", previousData: row }), /delete is not supported/)
   })
 })
 

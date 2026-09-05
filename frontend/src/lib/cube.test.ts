@@ -19,7 +19,6 @@ import {
   cubeApiPath,
   errorMessage,
   errorBody,
-  formSourceOf,
   groupFields,
   hrefForRelation,
   rowHref,
@@ -28,7 +27,6 @@ import {
   renderKindOf,
   metadataApiPath,
   OPENAPI_API_PATH,
-  patchBodyOf,
   recordApiPath,
   routeOf,
   saveCell,
@@ -698,6 +696,11 @@ describe("detail field groups", () => {
     assert.deepEqual(custom.fields.map((f) => f.name), ["tva", "cui"])
   })
 
+  it("carries the caller's emphasis flag on that section only", () => {
+    const sections = groupFields(published, [{ ...groups[0], important: true }, groups[1]])
+    assert.deepEqual(sections.map((s) => s.important ?? false), [true, false, false, false])
+  })
+
   it("without groups every field is a leftover, so nothing changes for a page that passes none", () => {
     assert.deepEqual(
       groupFields(published, []).map((s) => [s.legend, s.fields.length]),
@@ -724,64 +727,5 @@ describe("withSavedValue", () => {
   it("creates the `custom` sub-object when the row had none", () => {
     const bare: Row = { id: "r2", name: "Bare" }
     assert.deepEqual(withSavedValue(bare, field({ name: "cui", custom: true }), "y").custom, { cui: "y" })
-  })
-})
-
-// The admin-kit form (QWB-53): the form's values are a row, so a custom
-// field's path is inside `custom` and the PATCH body is the diff of the
-// editable keys only, coerced like an inline save.
-describe("the admin-kit form path and PATCH body", () => {
-  const fields = [
-    field({ name: "id", editable: false }),
-    field({ name: "name", required: true }),
-    field({ name: "employees", type: "integer", nullable: true }),
-    field({ name: "emailOptOut", type: "boolean" }),
-    field({ name: "rating", enum: ["Hot", "Cold"], nullable: true }),
-    field({ name: "tva", type: "boolean", custom: true }),
-    field({ name: "cui", custom: true, nullable: true }),
-  ]
-  const previous: Row = {
-    id: "org-1",
-    name: "Acme",
-    employees: 3,
-    emailOptOut: false,
-    rating: "Hot",
-    custom: { tva: false, cui: "RO1" },
-  }
-
-  it("a custom field's form path is under `custom`, a static field's is flat", () => {
-    assert.equal(formSourceOf(field({ name: "cui", custom: true })), "custom.cui")
-    assert.equal(formSourceOf(field({ name: "name" })), "name")
-  })
-
-  it("sends only the keys that changed, custom ones flat, coerced", () => {
-    const next: Row = {
-      ...previous,
-      id: "tampered",
-      name: "Acme SRL",
-      employees: 4,
-      rating: "",
-      custom: { tva: true, cui: "RO1" },
-    }
-    assert.deepEqual(patchBodyOf(fields, previous, next), {
-      name: "Acme SRL",
-      employees: 4,
-      rating: null,
-      tva: true,
-    })
-  })
-
-  it("an untouched form produces an empty body", () => {
-    assert.deepEqual(patchBodyOf(fields, previous, { ...previous, custom: { ...(previous.custom as Row) } }), {})
-  })
-
-  it("an emptied required field travels as-is so qwbe refuses it with its own message", () => {
-    assert.deepEqual(patchBodyOf(fields, previous, { ...previous, name: "" }), { name: "" })
-  })
-
-  it("a custom field defined tomorrow is diffed without a frontend change", () => {
-    const tomorrow = [...fields, field({ name: "iban", custom: true, nullable: true })]
-    const next: Row = { ...previous, custom: { ...(previous.custom as Row), iban: "RO49" } }
-    assert.deepEqual(patchBodyOf(tomorrow, previous, next), { iban: "RO49" })
   })
 })
