@@ -34,6 +34,7 @@ import {
   pageWindow,
   saveCell,
   sortRequestFor,
+  withSavedValue,
 } from "@/lib/cube"
 import { relationRefsOf } from "@/lib/relation-batch"
 import { readPrefs } from "@/lib/field-prefs"
@@ -241,26 +242,15 @@ export function CubeList({
       doFetch: apiFetch,
     })
     if (result.status === "saved") {
-      // Only the patched key is merged: a concurrent, out-of-order response
-      // body must not overwrite the other columns of the row. A custom
-      // field's value lives in the row's `custom` sub-object, where the cell
-      // reads it back -- merging it flat would leave the cell showing "--"
-      // or the stale value until a full reload.
-      const merge = (r: Row): Row =>
-        fieldMeta.custom
-          ? {
-              ...r,
-              custom: {
-                ...((r.custom as Row | undefined) ?? {}),
-                [result.field]: result.value,
-              },
-            }
-          : { ...r, [result.field]: result.value }
+      // Only the patched key is merged (withSavedValue): a concurrent,
+      // out-of-order response body must not overwrite the other columns.
       setPage((p) =>
         p
           ? {
               ...p,
-              rows: p.rows.map((r) => (String(r.id) === String(row.id) ? merge(r) : r)),
+              rows: p.rows.map((r) =>
+                String(r.id) === String(row.id) ? withSavedValue(r, fieldMeta, result.value) : r,
+              ),
             }
           : p,
       )

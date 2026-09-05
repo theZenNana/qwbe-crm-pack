@@ -19,15 +19,19 @@ import {
   cubeApiPath,
   errorMessage,
   errorBody,
+  formSourceOf,
+  groupFields,
   hrefForRelation,
   rowHref,
   listApiPath,
   listQueryString,
   renderKindOf,
   metadataApiPath,
+  patchBodyOf,
   routeOf,
   saveCell,
   sortRequestFor,
+  withSavedValue,
   titleOf,
   type ColumnSpec,
   type CubeMetadata,
@@ -627,5 +631,140 @@ describe("the create payload", () => {
   it("reports a required enum left unchosen by its label", () => {
     const { missing } = createPayloadOf(vatFields, { name: "Acme", tva: "true" })
     assert.deepEqual(missing, ["Form"])
+  })
+})
+
+// The detail page's fieldsets (QWB-53): a layout hint by field NAME over the
+// published metadata, never a second schema. The rule under test: nothing the
+// metadata publishes is lost, whatever the groups name.
+describe("detail field groups", () => {
+  const published = [
+    field({ name: "name", required: true }),
+    field({ name: "phone" }),
+    field({ name: "billingCity" }),
+    field({ name: "id", editable: false }),
+    field({ name: "tva", type: "boolean", custom: true }),
+  ]
+  const groups = [
+    { legend: "Organization", fields: ["name", "renamedAway"] },
+    { legend: "Contact details", fields: ["phone", "name"] },
+    { legend: "Empty", fields: ["nothingHere"] },
+  ]
+
+  it("places named fields in metadata-backed groups, in the group's order", () => {
+    const sections = groupFields(published, groups)
+    assert.deepEqual(
+      sections.map((s) => [s.legend, s.fields.map((f) => f.name)]),
+      [
+        ["Organization", ["name"]],
+        ["Contact details", ["phone"]],
+        ["Other", ["billingCity", "id"]],
+        ["Custom fields", ["tva"]],
+      ],
+    )
+  })
+
+  it("skips a name the metadata no longer publishes and drops an empty group", () => {
+    const legends = groupFields(published, groups).map((s) => s.legend)
+    assert.ok(!legends.includes("Empty"))
+  })
+
+  it("never places a field twice", () => {
+    const all = groupFields(published, groups).flatMap((s) => s.fields.map((f) => f.name))
+    assert.deepEqual([...new Set(all)].length, all.length)
+    assert.deepEqual(all.length, published.length)
+  })
+
+  it("a new custom field appears without a frontend change", () => {
+    const tomorrow = [...published, field({ name: "cui", custom: true })]
+    const custom = groupFields(tomorrow, groups).find((s) => s.legend === "Custom fields")!
+    assert.deepEqual(custom.fields.map((f) => f.name), ["tva", "cui"])
+  })
+
+  it("without groups every field is a leftover, so nothing changes for a page that passes none", () => {
+    assert.deepEqual(
+      groupFields(published, []).map((s) => [s.legend, s.fields.length]),
+      [["Other", 4], ["Custom fields", 1]],
+    )
+  })
+})
+
+// The saved value is merged where the field lives, and ONLY that key: the
+// list and the detail page share this merge.
+describe("withSavedValue", () => {
+  const row: Row = { id: "r1", name: "Acme", phone: "1", custom: { tva: false, cui: "x" } }
+
+  it("merges a static field at the top level and keeps the rest", () => {
+    assert.deepEqual(withSavedValue(row, field({ name: "phone" }), "2"), { ...row, phone: "2" })
+  })
+
+  it("merges a custom field inside `custom` without dropping its siblings", () => {
+    const saved = withSavedValue(row, field({ name: "tva", type: "boolean", custom: true }), true)
+    assert.deepEqual(saved.custom, { tva: true, cui: "x" })
+    assert.equal(saved.name, "Acme")
+  })
+
+  it("creates the `custom` sub-object when the row had none", () => {
+    const bare: Row = { id: "r2", name: "Bare" }
+    assert.deepEqual(withSavedValue(bare, field({ name: "cui", custom: true }), "y").custom, { cui: "y" })
+  })
+})
+
+// The admin-kit form (QWB-53): the form's values are a row, so a custom
+// field's path is inside `custom` and the PATCH body is the diff of the
+// editable keys only, coerced like an inline save.
+describe("the admin-kit form path and PATCH body", () => {
+  const fields = [
+    field({ name: "id", editable: false }),
+    field({ name: "name", required: true }),
+    field({ name: "employees", type: "integer", nullable: true }),
+    field({ name: "emailOptOut", type: "boolean" }),
+    field({ name: "rating", enum: ["Hot", "Cold"], nullable: true }),
+    field({ name: "tva", type: "boolean", custom: true }),
+    field({ name: "cui", custom: true, nullable: true }),
+  ]
+  const previous: Row = {
+    id: "org-1",
+    name: "Acme",
+    employees: 3,
+    emailOptOut: false,
+    rating: "Hot",
+    custom: { tva: false, cui: "RO1" },
+  }
+
+  it("a custom field's form path is under `custom`, a static field's is flat", () => {
+    assert.equal(formSourceOf(field({ name: "cui", custom: true })), "custom.cui")
+    assert.equal(formSourceOf(field({ name: "name" })), "name")
+  })
+
+  it("sends only the keys that changed, custom ones flat, coerced", () => {
+    const next: Row = {
+      ...previous,
+      id: "tampered",
+      name: "Acme SRL",
+      employees: 4,
+      rating: "",
+      custom: { tva: true, cui: "RO1" },
+    }
+    assert.deepEqual(patchBodyOf(fields, previous, next), {
+      name: "Acme SRL",
+      employees: 4,
+      rating: null,
+      tva: true,
+    })
+  })
+
+  it("an untouched form produces an empty body", () => {
+    assert.deepEqual(patchBodyOf(fields, previous, { ...previous, custom: { ...(previous.custom as Row) } }), {})
+  })
+
+  it("an emptied required field travels as-is so qwbe refuses it with its own message", () => {
+    assert.deepEqual(patchBodyOf(fields, previous, { ...previous, name: "" }), { name: "" })
+  })
+
+  it("a custom field defined tomorrow is diffed without a frontend change", () => {
+    const tomorrow = [...fields, field({ name: "iban", custom: true, nullable: true })]
+    const next: Row = { ...previous, custom: { ...(previous.custom as Row), iban: "RO49" } }
+    assert.deepEqual(patchBodyOf(tomorrow, previous, next), { iban: "RO49" })
   })
 })

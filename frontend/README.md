@@ -2,7 +2,8 @@
 
 Next.js (App Router) + TypeScript + Tailwind app for the CRM pack. All UI
 components come from [shadcn/ui](https://ui.shadcn.com) — copied exactly as the
-shadcn CLI generated them, never restyled.
+shadcn CLI generated them, never restyled -- plus, for the Organizations detail, the
+shadcn-admin-kit components vendored under `src/components/admin-kit` (QWB-53, below).
 
 ## Authentication model
 
@@ -22,6 +23,30 @@ assembled from the same metadata, with an organization's contacts derived by fil
 `crm/contacts` on `organizationId` and a contact's organization shown as a relation link.
 Paging and sorting are server-side end to end — the row request always carries
 `offset`, `limit` and `sortBy` and never fetches more than one page.
+
+## Organizations detail: the shadcn-admin-kit pilot (QWB-53)
+
+`/organizations/[id]` is the pilot for the admin detail layout that Contacts and the user page can
+adopt later. It is built on [shadcn-admin-kit](https://github.com/marmelab/shadcn-admin-kit) (MIT):
+the kit's form and input components are vendored verbatim under `src/components/admin-kit`
+(provenance and the four deliberate edits in its README) and run on `ra-core`, the kit's runtime,
+inside one scoped island (`src/components/cube-admin-edit.tsx`): a `CoreAdminContext` with a
+two-verb data provider (`src/lib/qwbe-data-provider.ts`, getOne and update over the same
+server-side cookie proxy every other call uses), a `MemoryRouter` so ra-core's routing hooks have a
+context without touching the Next.js router, and an `EditBase` in pessimistic mode. Nothing outside
+the island changes: Next.js keeps the URLs, the navigation, the login and the httpOnly cookie.
+
+The page names its fieldsets by field NAME only (`ORGANIZATION_GROUPS` in the page file);
+`groupFields` in `src/lib/cube.ts` distributes the published metadata over them, skips a name the
+backend no longer publishes, and puts every field no group names in "Other" (static) or "Custom
+fields" (runtime custom fields), so a field defined tomorrow shows up, editable, without a frontend
+change. Which kit input a field gets follows the metadata alone: enum -> `SelectInput`, boolean ->
+`BooleanInput`, integer or number -> `NumberInput`, everything else -> `TextInput` (a relation edits
+as its opaque id with the current target linked under it); a non-editable field is a `RecordField`.
+A custom field rides on the form path `custom.<name>` (`formSourceOf`), the same place the row
+carries it. One Save PATCHes only the keys that changed (`patchBodyOf`, coerced by the rule the
+inline list editor uses); qwbe's per-field refusal comes back under the input through ra-core's
+`body.errors` contract, and any other refusal as a toast with qwbe's own message.
 
 ## Run it
 
