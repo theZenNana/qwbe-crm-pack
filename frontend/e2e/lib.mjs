@@ -295,13 +295,16 @@ export const keypress = (key) => {
       ...pageArgs(),
     )
   }
-  if (key !== "Return") throw new Error(`keypress(${key}): only "Return" and "ctrl+a" are supported`)
+  const codes = { Return: ["Enter", 13], Escape: ["Escape", 27] }
+  const found = codes[key]
+  if (!found) throw new Error(`keypress(${key}): only "Return", "Escape" and "ctrl+a" are supported`)
+  const [name, code] = found
   return orca(
     "eval",
     "--expression",
     `(() => { const el = document.activeElement; if (!el) return "no-focus";` +
       ` const fire = (t) => el.dispatchEvent(new KeyboardEvent(t, {` +
-      ` key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true }));` +
+      ` key: "${name}", code: "${name}", keyCode: ${code}, which: ${code}, bubbles: true, cancelable: true }));` +
       ` fire("keydown"); fire("keyup"); return "pressed" })()`,
     ...pageArgs(),
   )

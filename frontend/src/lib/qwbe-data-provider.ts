@@ -58,6 +58,15 @@ function filtersOf(filter: Record<string, unknown>): Record<string, string> {
   return filters
 }
 
+// ra-core's own filter is `{q: searchText}` (the kit's AutocompleteInput
+// default filterToQuery). `q` is a reserved list key, so it must travel as
+// qwbe's `q` search, never as a bare field filter -- listQueryString would
+// otherwise drop it and the relation picker would never narrow (QWB-53 review).
+function searchOf(filter: Record<string, unknown>): { q?: string } {
+  const q = filter?.q
+  return typeof q === "string" && q !== "" ? { q } : {}
+}
+
 // The single path a cube serves one row at. The id is a path segment, so it is
 // percent-encoded (cube ids carry no slash today; the encoding is the
 // boundary's job, not an assumption about the id format).
@@ -109,6 +118,7 @@ export function qwbeDataProvider(doFetch: typeof fetch): DataProvider {
           offset: (page - 1) * perPage,
           limit: perPage,
           ...sortOf(sort),
+          ...searchOf(filter),
           filters: filtersOf(filter),
         }),
       )) as PageOf<Row>

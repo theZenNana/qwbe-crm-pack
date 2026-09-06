@@ -1163,6 +1163,70 @@ export async function scenarioCustomFieldTypes(api, seed) {
   )
 }
 
+// --- 11. detail page pencil: Escape discards the draft, Save writes the field ---
+// The shared detail renderer (cube-show.tsx) had no UI test at all. This one
+// drives the real pencil affordance on the organization detail: open the
+// Billing City editor, type, Escape (the value must NOT reach qwbe), open it
+// again, type, Save (the value MUST reach qwbe, read back through the API).
+export async function scenarioDetailEdit(api, seed) {
+  const name = "detail page pencil: Escape discards the draft and Save patches the field"
+  const before = (await api.call(`/organizations/${seed.orgA.id}`)).body ?? {}
+  await open(`/organizations/${seed.orgA.id}`)
+  await settle(ORG_A)
+  const pencil = (v) => v.role === "button" && /^Edit .*City/i.test(v.name ?? "")
+  const editor = (refs) =>
+    Object.entries(refs).find(([, v]) => v.role === "textbox" && /city/i.test(v.name ?? ""))?.[0]
+  if (!(await clickStable(pencil))) {
+    shot("11-detail-RED", { full: true })
+    return record(name, "RED", "no Edit Billing City pencil on the detail page", "11-detail-RED.png")
+  }
+  await pause(1500)
+  if (!editor(snapshot().refs)) {
+    shot("11-detail-RED", { full: true })
+    return record(name, "RED", "the pencil did not open a Billing City editor", "11-detail-RED.png")
+  }
+  const discarded = `E2E City Discarded ${Date.now()}`
+  keypress("ctrl+a")
+  type(discarded)
+  keypress("Escape")
+  await pause(1000)
+  const afterEscape = (await api.call(`/organizations/${seed.orgA.id}`)).body ?? {}
+  const escapeOk = !editor(snapshot().refs) && afterEscape.billingCity === before.billingCity
+  shot("11-after-escape")
+  if (!escapeOk) {
+    return record(name, "RED", `Escape kept the editor open or wrote ${discarded} (backend now ${afterEscape.billingCity})`, "11-after-escape.png")
+  }
+  if (!(await clickStable(pencil))) {
+    shot("11-detail-RED", { full: true })
+    return record(name, "RED", "the pencil did not come back after Cancel", "11-detail-RED.png")
+  }
+  await pause(1500)
+  if (!editor(snapshot().refs)) {
+    shot("11-detail-RED", { full: true })
+    return record(name, "RED", "the second pencil click did not open the editor", "11-detail-RED.png")
+  }
+  const saved = `E2E City Detail ${Date.now()}`
+  keypress("ctrl+a")
+  type(saved)
+  if (!(await clickStable((v) => v.role === "button" && v.name === "Save"))) {
+    shot("11-detail-RED", { full: true })
+    return record(name, "RED", "no Save button under the open editor", "11-detail-RED.png")
+  }
+  const shown = await waitForText(saved, 15_000)
+  await pause(1000)
+  const after = (await api.call(`/organizations/${seed.orgA.id}`)).body ?? {}
+  shot("11-after-save")
+  const pass = shown && !editor(snapshot().refs) && after.billingCity === saved
+  return record(
+    name,
+    pass ? "PASS" : "RED",
+    pass
+      ? `Escape left billingCity at ${JSON.stringify(before.billingCity)}; Save read back ${saved} through the API`
+      : `page=${shown} editorClosed=${!editor(snapshot().refs)} backend=${JSON.stringify(after.billingCity)}`,
+    "11-after-save.png",
+  )
+}
+
 /** Only the login scenario — used when the seed cannot get a session at all. */
 export async function scenarioLoginOnly() {
   await scenarioLogin()
@@ -1180,6 +1244,7 @@ export async function runAll(api, seed) {
   verdicts.push(await scenarioInlineEdit(api))
   verdicts.push(await scenarioNonEditable(api))
   verdicts.push(await scenarioNavigation(seed))
+  verdicts.push(await scenarioDetailEdit(api, seed))
   verdicts.push(await scenarioCreateOrganization(api))
   verdicts.push(await scenarioCustomField(api))
   verdicts.push(await scenarioCustomFieldTypes(api, seed))

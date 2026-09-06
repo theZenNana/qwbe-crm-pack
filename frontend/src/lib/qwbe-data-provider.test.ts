@@ -50,6 +50,34 @@ describe("qwbeDataProvider", () => {
     assert.equal(requests[0].url, "/api/qwbe/contacts?offset=0&limit=25")
   })
 
+  it("getList forwards ra-core's q filter as qwbe's search, next to field filters", async () => {
+    const { doFetch, requests } = stubFetch(() => pageOf([row]))
+    const provider = qwbeDataProvider(doFetch)
+    await provider.getList("crm/organizations", {
+      pagination: { page: 1, perPage: 25 },
+      sort: { field: "id", order: "ASC" },
+      filter: { q: "Acme & Co", status: "active" },
+    })
+    assert.equal(requests[0].url, "/api/qwbe/organizations?offset=0&limit=25&q=Acme+%26+Co&status=active")
+  })
+
+  it("getList drops an empty or non-string q and every reserved list key", async () => {
+    const { doFetch, requests } = stubFetch(() => pageOf([row]))
+    const provider = qwbeDataProvider(doFetch)
+    await provider.getList("crm/organizations", {
+      pagination: { page: 2, perPage: 10 },
+      sort: { field: "id", order: "ASC" },
+      filter: { q: "", limit: 1000, offset: 0, page: 9, sortBy: "name", ids: "x", n: 3 },
+    })
+    await provider.getList("crm/organizations", {
+      pagination: { page: 1, perPage: 25 },
+      sort: { field: "id", order: "ASC" },
+      filter: { q: 42, organizationId: null, active: true },
+    })
+    assert.equal(requests[0].url, "/api/qwbe/organizations?offset=10&limit=10&n=3")
+    assert.equal(requests[1].url, "/api/qwbe/organizations?offset=0&limit=25&active=true")
+  })
+
   it("getOne asks the row endpoint through the proxy", async () => {
     const { doFetch, requests } = stubFetch(() => row)
     const provider = qwbeDataProvider(doFetch)

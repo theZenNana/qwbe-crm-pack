@@ -338,7 +338,14 @@ function DeleteButton({
   // behind as orphans (the pack's orphan report surfaces them afterwards).
   // "unknown" = the scan itself failed; the user is told so rather than shown
   // a reassuring zero.
-  const [confirming, setConfirming] = useState<number | "unknown" | null>(null)
+  // ponytail: qwbe caps every list at 200 rows (kernel MAX_LIMIT) and has no
+  // filter or count on custom keys, so a full orphan count needs a backend
+  // slice (a `custom.<key>` presence filter or a count route). Until then the
+  // message carries the cube total next to the partial count, so a 60k-row
+  // cube never reads as fully scanned.
+  const [confirming, setConfirming] = useState<
+    { carrying: number; scanned: number; total: number | undefined } | "unknown" | null
+  >(null)
   const beginConfirm = async () => {
     setBusy(true)
     try {
@@ -347,13 +354,14 @@ function DeleteButton({
         setConfirming("unknown")
         return
       }
-      const p = (await r.json()) as { rows?: Row[] }
-      const carrying = (p.rows ?? []).filter((row) => {
+      const p = (await r.json()) as { rows?: Row[]; total?: number }
+      const rows = p.rows ?? []
+      const carrying = rows.filter((row) => {
         const custom = row.custom
         const v = custom && typeof custom === "object" ? (custom as Row)[fieldName] : undefined
         return v !== undefined && v !== null && v !== ""
       }).length
-      setConfirming(carrying)
+      setConfirming({ carrying, scanned: rows.length, total: p.total })
     } catch {
       setConfirming("unknown")
     } finally {
@@ -366,7 +374,9 @@ function DeleteButton({
         <span className="text-xs text-muted-foreground">
           {confirming === "unknown"
             ? "Could not count rows carrying a value; any that do become orphans."
-            : `${confirming} row(s) in the first 200 carry a value; they become orphans.`}
+            : confirming.total !== undefined && confirming.total > confirming.scanned
+              ? `${confirming.carrying} of the first ${confirming.scanned} row(s) carry a value; ${confirming.total - confirming.scanned} more row(s) were not scanned. Every value becomes an orphan.`
+              : `${confirming.carrying} of ${confirming.scanned} row(s) carry a value; they become orphans.`}
         </span>
         <Button
           variant="destructive"
