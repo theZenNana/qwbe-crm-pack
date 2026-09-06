@@ -8,6 +8,7 @@
 import { CubeKitShow } from "@/components/kit/cube-show"
 import { KitContext } from "@/components/kit/kit-context"
 import { SchemaApiPanel } from "@/components/schema-api-panel"
+import { SharingPanel } from "@/components/sharing-panel"
 import type { FieldGroupSpec } from "@/lib/cube"
 
 const CONTACT_GROUPS: FieldGroupSpec[] = [
@@ -33,6 +34,7 @@ async function Detail({ id }: { id: Promise<{ id: string }> }) {
       <KitContext>
         <CubeKitShow cube="crm/contacts" id={resolved} groups={CONTACT_GROUPS} />
       </KitContext>
+      <SharingPanel cube="crm/contacts" entityType="Contact" id={resolved} />
       <SchemaApiPanel cube="crm/contacts" id={resolved} />
     </div>
   )
