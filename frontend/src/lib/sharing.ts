@@ -136,6 +136,36 @@ export function grantRevokePath(grantId: string): string | null {
   return id ? `/api/qwbe/permissions/grants/${id}` : null
 }
 
+// Group members page (kernel slice 2026-09: GET /permissions/groups/{id}/members,
+// PageParams offset/limit capped at 200 by the backend). The group id is ONE
+// percent-encoded path segment; the page window travels explicitly.
+export function groupMembersPath(groupId: string, offset: number, limit: number): string | null {
+  const id = oneSegment(groupId)
+  if (!id) return null
+  if (!Number.isInteger(offset) || offset < 0) return null
+  if (!Number.isInteger(limit) || limit < 1) return null
+  return `/api/qwbe/permissions/groups/${id}/members?offset=${offset}&limit=${limit}`
+}
+
+export function groupCreatePath(): string {
+  return "/api/qwbe/permissions/groups"
+}
+
+export function groupRenamePath(groupId: string): string | null {
+  const id = oneSegment(groupId)
+  return id ? `/api/qwbe/permissions/groups/${id}` : null
+}
+
+export function groupMembersAddPath(groupId: string): string | null {
+  const id = oneSegment(groupId)
+  return id ? `/api/qwbe/permissions/groups/${id}/members` : null
+}
+
+export function groupMembersRemovePath(groupId: string): string | null {
+  const id = oneSegment(groupId)
+  return id ? `/api/qwbe/permissions/groups/${id}/members/remove` : null
+}
+
 // ---------------------------------------------------------------------------
 // Payloads: EXPLICIT, nonempty actions on every create
 // ---------------------------------------------------------------------------
@@ -285,6 +315,247 @@ export function chipsOf(
       total: isTotalActions(row.actions),
     }
   })
+}
+
+// ---------------------------------------------------------------------------
+// Groups admin adapter (Settings > Users and Groups)
+// ---------------------------------------------------------------------------
+
+// GroupMembershipSchema (permissions-schemas.ts:13-19). Members are addressed
+// by `username` on write, but carry an opaque `userId` here: labels resolve
+// through lookupUserNames, falling back to the raw id.
+export type GroupMembership = {
+  id: string
+  groupId: string
+  userId: string
+  createdBy: string
+  createdAt: string
+}
+
+// PageOf(GroupMembershipSchema). This endpoint is NEW with the members kernel
+// slice, so `total` is REQUIRED: a response without it is invalid and
+// fetchGroupMembersPage fails visibly instead of guessing.
+export type GroupMembershipPage = {
+  rows: GroupMembership[]
+  total: number
+  offset: number
+  limit: number
+}
+
+// Boundary check of the members page shape; the UI never renders a page that
+// did not pass it (an unknown shape must never look like "no members").
+export function parseMembersPage(raw: unknown): GroupMembershipPage | null {
+  if (typeof raw !== "object" || raw === null) return null
+  const page = raw as Record<string, unknown>
+  const count = (v: unknown) => typeof v === "number" && Number.isInteger(v) && v >= 0
+  if (!Array.isArray(page.rows) || !count(page.total) || !count(page.offset) || !count(page.limit)) return null
+  const rows: GroupMembership[] = []
+  for (const row of page.rows as unknown[]) {
+    if (typeof row !== "object" || row === null) return null
+    const m = row as Record<string, unknown>
+    if (typeof m.id !== "string" || typeof m.groupId !== "string" || typeof m.userId !== "string") return null
+    rows.push({
+      id: m.id,
+      groupId: m.groupId,
+      userId: m.userId,
+      createdBy: typeof m.createdBy === "string" ? m.createdBy : "",
+      createdAt: typeof m.createdAt === "string" ? m.createdAt : "",
+    })
+  }
+  return { rows, total: page.total as number, offset: page.offset as number, limit: page.limit as number }
+}
+
+// One row of the members list. `username` is null when the account lookup
+// did not return it: the row then shows the opaque id and a remove MUST ask
+// for an explicit username, because the id can never be sent as a username.
+export type MemberRow = {
+  membershipId: string
+  userId: string
+  username: string | null
+}
+
+export function memberRowsOf(
+  rows: ReadonlyArray<GroupMembership>,
+  userNames: Readonly<Record<string, string>>,
+): MemberRow[] {
+  return rows.map((row) => ({
+    membershipId: row.id,
+    userId: row.userId,
+    username: userNames[row.userId] ?? null,
+  }))
+}
+
+// true = another page exists; empty rows with total 0 is the only "no
+// members" signal (the caller already knows the page is valid).
+export function membersHasMore(page: GroupMembershipPage): boolean {
+  return page.offset + page.rows.length < page.total
+}
+
+// The admin calls validate at the boundary and keep qwbe's own message on
+// refusal. status 0 = the request never reached the backend (network, proxy
+// down): NOT a refusal, and for a member list NOT an empty group.
+
+function jsonInit(payload: unknown): RequestInit {
+  return {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  }
+}
+
+// The full group rows of one cube. `status: 403` = the backend refused
+// (requireCubeAccess: neither entity owner, nor cube admin, nor superadmin)
+// -- the UI hides the admin panel; status 0 = network. Never throws.
+export async function fetchGroups(
+  cube: string,
+  doFetch: typeof fetch = apiFetch,
+): Promise<SharingResult<PermissionGroupRef[]>> {
+  const name = cube.trim()
+  if (name === "") return { ok: false, status: 400, message: "choose a cube" }
+  try {
+    const response = await doFetch(groupsPath(name))
+    if (!response.ok) return refusal(response)
+    return { ok: true, value: (await response.json()) as PermissionGroupRef[] }
+  } catch {
+    return { ok: false, status: 0, message: "network error" }
+  }
+}
+
+// Create a group in one cube. The name is trimmed and must be nonempty
+// (the server validates nonempty only; no uniqueness check exists).
+export async function createGroup(opts: {
+  cube: string
+  name: string
+  doFetch?: typeof fetch
+}): Promise<SharingResult<PermissionGroupRef>> {
+  const cube = opts.cube.trim()
+  const name = opts.name.trim()
+  if (cube === "") return { ok: false, status: 400, message: "choose a cube" }
+  if (name === "") return { ok: false, status: 400, message: "the group name cannot be empty" }
+  const doFetch = opts.doFetch ?? apiFetch
+  try {
+    const response = await doFetch(groupCreatePath(), jsonInit({ cube, name }))
+    if (!response.ok) return refusal(response)
+    return { ok: true, value: (await response.json()) as PermissionGroupRef }
+  } catch {
+    return { ok: false, status: 0, message: "network error" }
+  }
+}
+
+// Rename by group id (PATCH). Same nonempty-name rule.
+export async function renameGroup(opts: {
+  groupId: string
+  name: string
+  doFetch?: typeof fetch
+}): Promise<SharingResult<PermissionGroupRef>> {
+  const name = opts.name.trim()
+  if (name === "") return { ok: false, status: 400, message: "the group name cannot be empty" }
+  const path = groupRenamePath(opts.groupId)
+  if (!path) return { ok: false, status: 400, message: "invalid group id" }
+  const doFetch = opts.doFetch ?? apiFetch
+  try {
+    const response = await doFetch(path, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name }),
+    })
+    if (!response.ok) return refusal(response)
+    return { ok: true, value: (await response.json()) as PermissionGroupRef }
+  } catch {
+    return { ok: false, status: 0, message: "network error" }
+  }
+}
+
+// One members page with EXPLICIT offset and limit; total comes back so the
+// UI knows whether the list is truly empty or a refusal/network gap. Never
+// throws: status 0 marks a network failure; a 200 with an invalid body is
+// reported as a failure with the response status, never as an empty page.
+export async function fetchGroupMembersPage(opts: {
+  groupId: string
+  offset: number
+  limit: number
+  doFetch?: typeof fetch
+}): Promise<SharingResult<GroupMembershipPage>> {
+  const path = groupMembersPath(opts.groupId, opts.offset, opts.limit)
+  if (!path) return { ok: false, status: 400, message: "invalid group id or page window" }
+  const doFetch = opts.doFetch ?? apiFetch
+  try {
+    const response = await doFetch(path)
+    if (!response.ok) return refusal(response)
+    const page = parseMembersPage(await response.json().catch(() => null))
+    if (!page) return { ok: false, status: response.status, message: "invalid members page response" }
+    return { ok: true, value: page }
+  } catch {
+    return { ok: false, status: 0, message: "network error" }
+  }
+}
+
+// Add one member by username. Idempotent on the backend (an existing
+// membership is returned as is).
+export async function addGroupMember(opts: {
+  groupId: string
+  username: string
+  doFetch?: typeof fetch
+}): Promise<SharingResult<GroupMembership>> {
+  const username = opts.username.trim()
+  if (username === "") return { ok: false, status: 400, message: "choose a user" }
+  const path = groupMembersAddPath(opts.groupId)
+  if (!path) return { ok: false, status: 400, message: "invalid group id" }
+  const doFetch = opts.doFetch ?? apiFetch
+  try {
+    const response = await doFetch(path, jsonInit({ username }))
+    if (!response.ok) return refusal(response)
+    return { ok: true, value: (await response.json()) as GroupMembership }
+  } catch {
+    return { ok: false, status: 0, message: "network error" }
+  }
+}
+
+// Remove one member by username. The backend answers 404 for a membership
+// that does not exist; qwbe's message travels verbatim.
+export async function removeGroupMember(opts: {
+  groupId: string
+  username: string
+  doFetch?: typeof fetch
+}): Promise<SharingResult<{ removed: string }>> {
+  const username = opts.username.trim()
+  if (username === "") return { ok: false, status: 400, message: "choose a user" }
+  const path = groupMembersRemovePath(opts.groupId)
+  if (!path) return { ok: false, status: 400, message: "invalid group id" }
+  const doFetch = opts.doFetch ?? apiFetch
+  try {
+    const response = await doFetch(path, jsonInit({ username }))
+    if (!response.ok) return refusal(response)
+    return { ok: true, value: (await response.json()) as { removed: string } }
+  } catch {
+    return { ok: false, status: 0, message: "network error" }
+  }
+}
+
+// Remove the member whose account id the operator clicked. The remove route
+// takes a USERNAME, so the id is resolved fresh through the directory right
+// before the request; an id the directory cannot resolve now is refused
+// without any request, and a username typed by the operator is never used
+// as the target. The kernel answers with the id it actually removed; a
+// mismatch is reported as a failure, never as success.
+export async function removeGroupMemberById(opts: {
+  groupId: string
+  userId: string
+  doFetch?: typeof fetch
+}): Promise<SharingResult<{ removed: string; username: string }>> {
+  const doFetch = opts.doFetch ?? apiFetch
+  const username = (await lookupUserNames([opts.userId], doFetch))[opts.userId]
+  if (!username) return { ok: false, status: 0, message: "cannot resolve this account right now, try again" }
+  const result = await removeGroupMember({ groupId: opts.groupId, username, doFetch })
+  if (!result.ok) return result
+  if (result.value.removed !== opts.userId) {
+    return {
+      ok: false,
+      status: 500,
+      message: `removed account ${result.value.removed} instead of ${opts.userId}; the member list was refreshed`,
+    }
+  }
+  return { ok: true, value: { removed: result.value.removed, username } }
 }
 
 // ---------------------------------------------------------------------------

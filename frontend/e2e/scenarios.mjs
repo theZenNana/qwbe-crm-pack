@@ -1324,6 +1324,88 @@ export async function scenarioSharing(api, seed) {
   )
 }
 
+// --- 13. groups in Settings: create, rename, add @reader, remove, read back ---
+// Needs the kernel members slice (GET /permissions/groups/:id/members); on an
+// older kernel the panel shows its "could not load" message and this records
+// RED with that detail, never a false "no members". Groups have no delete
+// endpoint, so the group created here stays behind (name carries "e2e").
+export async function scenarioGroups(api) {
+  const name = "groups panel: create, rename, add @reader (read back), remove, members none"
+  const groupName = `e2e group ${Date.now()}`
+  await open("/settings")
+  if (!(await waitForText("Permission groups", 15_000))) {
+    shot("13-groups-RED", { full: true })
+    return record(name, "RED", "the groups panel is not on the settings page", "13-groups-RED.png")
+  }
+  const nameBox = await clickStable((v) => v.role === "textbox" && v.name === "New group name", "New group name")
+  if (!nameBox) return record(name, "RED", "no New group name input", "13-groups-RED.png")
+  type(groupName)
+  if (!(await clickStable((v) => v.role === "button" && v.name === "Create group", "Create group"))) {
+    return record(name, "RED", "no Create group button", "13-groups-RED.png")
+  }
+  const created = await waitForText(`Created group ${groupName}`, 10_000)
+  await pause(1000)
+  const listed = (await api.call(`/permissions/groups?cube=${encodeURIComponent("crm/organizations")}`)).body ?? []
+  const group = Array.isArray(listed) ? listed.find((g) => g.name === groupName) : null
+  shot("13-created")
+  if (!created || !group) {
+    return record(name, "RED", `create: toast=${created} api has group=${Boolean(group)}`, "13-created.png")
+  }
+  // The new group is selected on creation: its section carries the members
+  // list. Empty group = "Members: none" (rows [] AND total 0), never a guess.
+  const none = await waitForText("Members: none", 15_000)
+  if (!none) {
+    shot("13-members-RED", { full: true })
+    return record(name, "RED", "new group did not show 'Members: none' (members endpoint refused or missing?)", "13-members-RED.png")
+  }
+  // rename
+  const renameBox = await clickStable((v) => v.role === "textbox" && v.name === "Group name", "Group name")
+  if (!renameBox) return record(name, "RED", "no Group name input in the group section", "13-created.png")
+  type(`${groupName} renamed`)
+  if (!(await clickStable((v) => v.role === "button" && v.name === "Rename", "Rename"))) {
+    return record(name, "RED", "no Rename button", "13-created.png")
+  }
+  const renamed = await waitForText("Renamed group to", 10_000)
+  // add @reader
+  if (!(await clickStable((v) => v.role === "combobox" && v.name === "Username", "Username"))) {
+    return record(name, "RED", "no Username picker in the group section", "13-created.png")
+  }
+  type("reader")
+  if (!(await clickStable((v) => v.role === "button" && v.name === "Add member", "Add member"))) {
+    return record(name, "RED", "no Add member button", "13-created.png")
+  }
+  const addedToast = await waitForText("Added @reader", 10_000)
+  const chip = await findStable((v) => v.role === "button" && v.name === "Remove @reader")
+  await pause(1000)
+  const members = (await api.call(`/permissions/groups/${encodeURIComponent(group.id)}/members?offset=0&limit=50`)).body ?? {}
+  shot("13-added")
+  if (!addedToast || !chip || members.total !== 1) {
+    return record(name, "RED", `add: toast=${addedToast} chip=${chip !== null} api total=${members.total}`, "13-added.png")
+  }
+  // remove with the two-step confirmation
+  if (!(await clickStable((v) => v.role === "button" && v.name === "Remove @reader"))) {
+    return record(name, "RED", "the @reader row lost its Remove button", "13-added.png")
+  }
+  if (!(await clickStable((v) => v.role === "button" && v.name === "Confirm remove @reader"))) {
+    shot("13-groups-RED", { full: true })
+    return record(name, "RED", "no Confirm remove step after Remove", "13-groups-RED.png")
+  }
+  const removedToast = await waitForText("Removed @reader", 10_000)
+  const noneAfter = await waitForText("Members: none", 15_000)
+  await pause(1000)
+  const after = (await api.call(`/permissions/groups/${encodeURIComponent(group.id)}/members?offset=0&limit=50`)).body ?? {}
+  shot("13-removed")
+  const pass = renamed && removedToast && noneAfter && after.total === 0
+  return record(
+    name,
+    pass ? "PASS" : "RED",
+    pass
+      ? "group created and read back; renamed; @reader added (API total 1) and removed (API total 0); empty list says none"
+      : `renamed=${renamed} removedToast=${removedToast} noneAfter=${noneAfter} api total after=${after.total}`,
+    "13-removed.png",
+  )
+}
+
 /** Only the login scenario — used when the seed cannot get a session at all. */
 export async function scenarioLoginOnly() {
   await scenarioLogin()
@@ -1343,6 +1425,7 @@ export async function runAll(api, seed) {
   verdicts.push(await scenarioNavigation(seed))
   verdicts.push(await scenarioDetailEdit(api, seed))
   verdicts.push(await scenarioSharing(api, seed))
+  verdicts.push(await scenarioGroups(api))
   verdicts.push(await scenarioCreateOrganization(api))
   verdicts.push(await scenarioCustomField(api))
   verdicts.push(await scenarioCustomFieldTypes(api, seed))

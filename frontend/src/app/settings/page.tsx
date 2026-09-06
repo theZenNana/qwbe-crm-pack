@@ -1,5 +1,5 @@
-// The Settings area: runtime custom fields are managed here, per
-// entity, never on the lists. The cube selector addresses every cube this pack
+// The Settings area: runtime custom fields and permission groups are managed
+// here, per entity, never on the lists. The cube selector addresses every cube this pack
 // serves -- organizations, contacts and contracts -- whether or not the app has
 // a list route for it, because definitions ride the customfields API, not the
 // cube's own frontend.
@@ -12,6 +12,7 @@
 import { useState } from "react"
 
 import { CustomFieldsPanel } from "@/components/custom-fields-panel"
+import { GroupsPanel } from "@/components/groups-panel"
 import { Label } from "@/components/ui/label"
 import {
   Select,
@@ -53,6 +54,7 @@ export default function SettingsPage() {
       {/* key remounts the panel on cube switch so no definition list, error
           or open delete confirmation of the previous cube survives (QWB-60). */}
       <CustomFieldsPanel key={cube} cube={cube} />
+      <GroupsPanel key={`groups:${cube}`} cube={cube} />
     </main>
   )
 }
