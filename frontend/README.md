@@ -2,7 +2,9 @@
 
 Next.js (App Router) + TypeScript + Tailwind app for the CRM pack. All UI
 components come from [shadcn/ui](https://ui.shadcn.com) — copied exactly as the
-shadcn CLI generated them, never restyled.
+shadcn CLI generated them, never restyled -- plus, on the detail pages, the
+[shadcn-admin-kit](https://github.com/marmelab/shadcn-admin-kit) 1.0.7 package (MIT), used as
+published (QWB-53 / QWB-54, below).
 
 ## Authentication model
 
@@ -22,6 +24,38 @@ assembled from the same metadata, with an organization's contacts derived by fil
 `crm/contacts` on `organizationId` and a contact's organization shown as a relation link.
 Paging and sorting are server-side end to end — the row request always carries
 `offset`, `limit` and `sortBy` and never fetches more than one page.
+
+## Detail pages: one shadcn-admin-kit renderer for every entity (QWB-53, QWB-54)
+
+`/organizations/[id]` and `/contacts/[id]` are the SAME component, `CubeKitShow` in
+`src/components/kit/cube-show.tsx`, built on the real shadcn-admin-kit 1.0.7 components (Card,
+RecordField, Form, TextInput, SelectInput, BooleanInput, ReferenceInput + AutocompleteInput,
+SaveButton) running on `ra-core`, the kit's runtime, inside one scoped island
+(`src/components/kit/kit-context.tsx`): a `CoreAdminContext` with the data provider
+(`src/lib/qwbe-data-provider.ts`, every verb over the same server-side cookie proxy every other call
+uses; a refusal becomes ra-core's `HttpError` with qwbe's message and the per-field `body.errors`)
+and a `MemoryRouter` so the kit's routing hooks have a context without touching the Next.js router.
+Nothing outside the island changes: Next.js keeps the URLs, the navigation, the login and the
+httpOnly cookie.
+
+A page names its fieldsets by field NAME only (`ORGANIZATION_GROUPS`, `CONTACT_GROUPS` in the page
+files); `groupFields` in `src/lib/cube.ts` distributes the published metadata over them, skips a name
+the backend no longer publishes, and puts every field no group names in "Other" (static) or "Custom
+fields" (runtime custom fields), so a field defined tomorrow shows up without a frontend change. A
+group may carry `important: true`: a border accent plus the word "Important" in its legend, a layout
+emphasis for the page's primary section (never color alone, never derived from the data); both pages
+demonstrate it on their first group.
+
+Read mode shows every published field with a Copy action, a relation as a link to its target's page,
+and a collapsible "Schema & API" panel (QWB-55) linking the field metadata, the record JSON and the
+OpenAPI document through the proxy. Edit turns the same page into a form in place (same URL): the
+fields the metadata marks editable get the kit input their type calls for (enum -> `SelectInput`,
+boolean -> `BooleanInput`, integer or number -> a number `TextInput`, relation -> the reference
+picker, else `TextInput`), a non-editable field keeps its read-only display, and one Save PATCHes only
+the keys that changed (`changedPayloadOf` in `src/lib/kit-form.ts`, coerced by the rule the inline
+list editor uses); Cancel discards the drafts. A refusal keeps the drafts on screen with qwbe's own
+message and the refused field's label. An organization's contacts stay a derived `CubeList` pinned on
+`organizationId` under the card.
 
 ## Run it
 

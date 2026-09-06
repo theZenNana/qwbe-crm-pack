@@ -25,11 +25,28 @@ export type FieldMetadata = {
   custom: boolean
 }
 
+// The list query contract a cube publishes (qwbe core/src/metadata/schemas.ts
+// ListContract): what its list route actually honours. `search` names the fields
+// `q=` scans (PREFIX match, ORed together); `filters` names the fields accepted
+// as `<field>=<value>` EXACT match, relations always among them.
+export type ListContractMetadata = {
+  params: string[]
+  maxPageSize: number
+  defaultPageSize: number
+  search: string[]
+  filters: string[]
+  sort: string[]
+}
+
 export type CubeMetadata = {
   cube: string
   entity: string | null
   version: string | null
   schemaHash: string
+  // The published list contract. Optional in the type only so a response from a
+  // kernel that publishes nothing here still parses; every UI control derives
+  // from it when present (see listControlsOf).
+  list?: ListContractMetadata | null
   fields: FieldMetadata[]
 }
 
@@ -81,16 +98,33 @@ export function canDefineFields(permissions: ReadonlyArray<string>): boolean {
 // paging. `q` and `ids` are reserved for the same reason: qwbe's list contract
 // reads them itself (q scans the searchable fields, ids fetches a batch), so a
 // field of one of those names must not arrive as a bare filter key either.
-const RESERVED_QUERY_KEYS = new Set(["offset", "limit", "sortBy", "descending", "q", "ids"])
+// The fixed half of qwbe's list query (core/src/metadata/declarations.ts
+// ListParams -- the same keys the published contract lists under `params`). A
+// cube field with one of these names must never be sent as a bare filter key:
+// it would override paging, sorting or the q/ids scans.
+const RESERVED_QUERY_KEYS = new Set([
+  "offset",
+  "limit",
+  "sortBy",
+  "descending",
+  "page",
+  "pageSize",
+  "sort",
+  "q",
+  "ids",
+])
 
 export type ListParams = {
   offset?: number
   limit?: number
   sortBy?: string
   descending?: boolean
-  // Field filters (server-side equality, e.g. organizationId on contacts). Keys are
+  // Field filters (server-side exact equality, e.g. organizationId on contacts). Keys are
   // field NAMES from the metadata, never hard-coded per entity here.
   filters?: Record<string, string>
+  // Prefix search over the cube's declared search fields, as qwbe's list route
+  // reads `q` itself. First-class, never smuggled through `filters`.
+  q?: string
 }
 
 // The single first path segment a cube serves under. qwbe mounts a child cube
@@ -136,6 +170,23 @@ export function metadataApiPath(cube: string): string {
   return `/api/qwbe/catalog/${encodeURIComponent(cube)}/metadata`
 }
 
+// Proxy path of one record (GET /<leaf>/{id}). The id is one path segment, so
+// it is percent-encoded: an id carrying "/" must never become extra segments.
+// Returns null for an id that cannot name a record: empty (would resolve to
+// the LIST endpoint) or a bare "." / ".." (the browser folds those before the
+// request, and the proxy refuses a decoded ".." anyway).
+export function recordApiPath(cube: string, id: string): string | null {
+  if (id === "" || id === "." || id === "..") return null
+  return cubeApiPath(cube, `/${encodeURIComponent(id)}`)
+}
+
+// The kernel's one OpenAPI document (qwbe core/src/main.ts GatedOpenApi): the
+// complete spec across every mounted cube, served only to an authenticated
+// Bearer, hence through the same cookie proxy as every other call. There is
+// no per-cube spec and no documented anchor, so this is deliberately the
+// whole document with no invented query or fragment filter.
+export const OPENAPI_API_PATH = "/api/qwbe/openapi.json"
+
 // Builds the query string of a list request. Paging and sorting go to qwbe
 // (server-side paging end to end); there is no client-side slice anywhere.
 // A filter key that collides with a paging key is skipped rather than sent, so
@@ -146,10 +197,43 @@ export function listQueryString(params: ListParams): string {
   if (params.limit !== undefined) q.set("limit", String(params.limit))
   if (params.sortBy !== undefined) q.set("sortBy", params.sortBy)
   if (params.descending) q.set("descending", "true")
+  if (params.q !== undefined && params.q !== "") q.set("q", params.q)
   for (const [field, value] of Object.entries(params.filters ?? {})) {
     if (value !== "" && !RESERVED_QUERY_KEYS.has(field)) q.set(field, value)
   }
   return q.toString()
+}
+
+// The filter and search controls a list offers, derived from the PUBLISHED list
+// contract. `search` is one prefix search sent as `q` (the contract's `search`
+// fields are scanned by the backend); `filters` are exact-equality fields the
+// backend accepts as `<field>=<value>`. A field the caller pins through
+// fixedFilters gets no control of its own, and a field named like a list
+// parameter is never admitted as a filter.
+// Without a published contract (an older kernel) the fallback is the field
+// flags: searchable fields as exact filters, no q.
+export type ListControls = {
+  search: boolean
+  filters: FieldMetadata[]
+}
+
+export function listControlsOf(
+  fields: FieldMetadata[],
+  list: ListContractMetadata | null | undefined,
+  fixedFilters: Readonly<Record<string, string>> = {},
+): ListControls {
+  const byName = new Map(fields.map((f) => [f.name, f]))
+  const pinned = new Set(Object.keys(fixedFilters))
+  const pick = (names: string[]): FieldMetadata[] =>
+    names
+      .filter((n) => !pinned.has(n) && !RESERVED_QUERY_KEYS.has(n))
+      .map((n) => byName.get(n))
+      .filter((f): f is FieldMetadata => f !== undefined)
+  if (list) return { search: list.search.length > 0, filters: pick(list.filters) }
+  return {
+    search: false,
+    filters: pick(fields.filter((f) => f.searchable).map((f) => f.name)),
+  }
 }
 
 export function listApiPath(cube: string, params: ListParams): string {
@@ -200,6 +284,17 @@ export function pageWindow(
     currentPage: Math.floor(offset / pageSize) + 1,
     lastPage: total === undefined ? undefined : Math.max(1, Math.ceil(total / pageSize)),
   }
+}
+
+// The page a typed "Page" value asks for: a whole number clamped to
+// 1..lastPage (no upper clamp while qwbe has not reported a total). Anything
+// that is not a whole number -- empty, "2.5", "abc", Infinity -- is undefined,
+// and the caller restores the current page instead of requesting one.
+export function pageFromInput(raw: string, lastPage: number | undefined): number | undefined {
+  const text = raw.trim()
+  const n = Number(text)
+  if (text === "" || !Number.isInteger(n)) return undefined
+  return Math.max(1, lastPage === undefined ? n : Math.min(n, lastPage))
 }
 
 export function sortRequestFor(
@@ -356,6 +451,58 @@ export function createPayloadOf(
     }
   }
   return { payload, missing }
+}
+
+// A fieldset of a detail page: a legend and the field NAMES it groups, in
+// display order. Names only -- labels, types and editability still come from
+// the metadata, so this is a layout hint, not a second schema. `important`
+// is a presentation emphasis for the page's primary section (a border accent
+// plus a textual "Important" marker, never color alone); it says nothing
+// about the data and is never derived from it.
+export type FieldGroupSpec = { legend: string; fields: string[]; important?: boolean }
+
+export type FieldSection = { legend: string; fields: FieldMetadata[]; important?: boolean }
+
+// Distributes the published fields over the caller's groups by name. A name
+// the metadata does not publish is skipped (the field was removed or renamed
+// on the backend); a published field NO group names is never lost: static
+// leftovers land in "Other", runtime custom fields in "Custom fields" -- so a
+// custom field defined tomorrow shows up without a frontend change. Empty
+// groups render nothing.
+export function groupFields(fields: FieldMetadata[], groups: readonly FieldGroupSpec[]): FieldSection[] {
+  const byName = new Map(fields.map((f) => [f.name, f]))
+  const placed = new Set<string>()
+  const sections: FieldSection[] = []
+  for (const group of groups) {
+    const chosen: FieldMetadata[] = []
+    for (const name of group.fields) {
+      const field = byName.get(name)
+      if (field && !placed.has(name)) {
+        chosen.push(field)
+        placed.add(name)
+      }
+    }
+    if (chosen.length > 0) {
+      sections.push({ legend: group.legend, fields: chosen, ...(group.important ? { important: true } : {}) })
+    }
+  }
+  const rest = fields.filter((f) => !placed.has(f.name))
+  const other = rest.filter((f) => !f.custom)
+  const custom = rest.filter((f) => f.custom)
+  if (other.length > 0) sections.push({ legend: "Other", fields: other })
+  if (custom.length > 0) sections.push({ legend: "Custom fields", fields: custom })
+  return sections
+}
+
+// The row after one saved field, merging ONLY that key: a concurrent,
+// out-of-order response body must not overwrite the other fields. A custom
+// field's value lives in the row's `custom` sub-object, where the cell reads
+// it back -- merging it flat would leave the cell showing "--" or the stale
+// value until a full reload.
+export function withSavedValue(row: Row, field: FieldMetadata, value: unknown): Row {
+  return field.custom
+    ? { ...row, custom: { ...((row.custom as Row | undefined) ?? {}), [field.name]: value } }
+    : { ...row, [field.name]: value }
 }
 
 export type SaveResult =

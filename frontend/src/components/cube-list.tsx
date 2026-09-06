@@ -30,10 +30,13 @@ import {
   hrefForRelation,
   rowHref,
   listApiPath,
+  listControlsOf,
   metadataApiPath,
+  pageFromInput,
   pageWindow,
   saveCell,
   sortRequestFor,
+  withSavedValue,
 } from "@/lib/cube"
 import { relationRefsOf } from "@/lib/relation-batch"
 import { readPrefs } from "@/lib/field-prefs"
@@ -96,10 +99,17 @@ export function CubeList({
   const [pageSize, setPageSize] = useState(PAGE_SIZES[0])
   const [sortBy, setSortBy] = useState<string | undefined>(undefined)
   const [descending, setDescending] = useState(false)
-  // The chosen values of the searchable fields, keyed by field name; empty
+  // The chosen values of the exact filter fields, keyed by field name; empty
   // string means "all".
   const [search, setSearch] = useState<Record<string, string>>({})
+  // The prefix search over the cube's declared search fields, sent as `q`.
+  const [prefix, setPrefix] = useState("")
   const [edit, setEdit] = useState<EditState | null>(null)
+  // What is typed into the "Page" box before it is committed (Enter or blur);
+  // null shows the current page. Keeping the draft apart from the offset lets
+  // a user clear and retype, and a rejected or same-page commit just drops the
+  // draft, so the box shows the current page again without a request.
+  const [pageDraft, setPageDraft] = useState<string | null>(null)
   // Per-cell error messages from a failed PATCH, keyed "id:field".
   const [cellErrors, setCellErrors] = useState<Record<string, string>>({})
   // False until the client has hydrated: before that, a click on a rendered
@@ -134,13 +144,23 @@ export function CubeList({
     }
   }, [cube])
 
+  // The filter/search controls derive from the PUBLISHED list contract, so the
+  // UI can only offer what the backend actually honours: one prefix search as
+  // `q` when the contract names search fields, exact filters from the
+  // contract's filter list (relations included, fixed-filtered fields and
+  // reserved parameter names excluded).
+  const controls = useMemo(
+    () => (meta ? listControlsOf(meta.fields, meta.list, fixedFilters ?? {}) : null),
+    [meta, fixedFilters],
+  )
+
   const filters = useMemo<Record<string, string>>(() => {
     const chosen: Record<string, string> = {}
-    for (const f of meta?.fields ?? []) {
-      if (f.searchable && search[f.name]) chosen[f.name] = search[f.name]
+    for (const f of controls?.filters ?? []) {
+      if (search[f.name]) chosen[f.name] = search[f.name]
     }
     return { ...(fixedFilters ?? {}), ...chosen }
-  }, [fixedFilters, search, meta])
+  }, [fixedFilters, search, controls])
   const effectiveFilters = useMemo(
     () => Object.fromEntries(Object.entries(filters).filter(([, v]) => v !== "")),
     [filters],
@@ -148,13 +168,28 @@ export function CubeList({
 
   const load = useCallback(() => {
     let alive = true
-    apiFetch(listApiPath(cube, { offset, limit: pageSize, sortBy, descending, filters: effectiveFilters }))
+    apiFetch(
+      listApiPath(cube, {
+        offset,
+        limit: pageSize,
+        sortBy,
+        descending,
+        ...(prefix === "" ? {} : { q: prefix }),
+        filters: effectiveFilters,
+      }),
+    )
       .then(async (r) => {
         if (!r.ok) throw new Error(`list request failed: ${r.status}`)
         return (await r.json()) as PageOf<Row>
       })
       .then((p) => {
-        if (alive) setPage(p)
+        // A success for the CURRENT request retires the alert of an earlier
+        // failure; a response for a superseded request (alive false) neither
+        // shows a page nor clears an error it did not cause.
+        if (alive) {
+          setPage(p)
+          setListError(null)
+        }
       })
       .catch((e: unknown) => {
         if (alive) setListError(e instanceof Error ? e.message : String(e))
@@ -162,7 +197,7 @@ export function CubeList({
     return () => {
       alive = false
     }
-  }, [cube, offset, pageSize, sortBy, descending, effectiveFilters])
+  }, [cube, offset, pageSize, sortBy, descending, prefix, effectiveFilters])
 
   useEffect(() => load(), [load])
 
@@ -204,7 +239,6 @@ export function CubeList({
   // on the detail page). When this app has a route for the cube, the title
   // cell links to the row's detail page; the other cells stay inline-editable.
   const titleFieldName = meta.fields.find((f) => f.required)?.name
-  const searchableFields = meta.fields.filter((f) => f.searchable)
   const total = page?.total
   const rowCount = page?.rows.length ?? 0
   const { currentPage, lastPage } = pageWindow(offset, pageSize, total)
@@ -228,6 +262,14 @@ export function CubeList({
     })
   }
 
+  const commitPage = () => {
+    if (pageDraft === null) return
+    const wanted = pageFromInput(pageDraft, lastPage)
+    setPageDraft(null)
+    if (wanted === undefined || wanted === currentPage) return
+    requery(() => setOffset((wanted - 1) * pageSize))
+  }
+
   const saveEdit = async (row: Row, fieldMeta: FieldMetadata, next: string) => {
     setEdit(null)
     const key = `${String(row.id)}:${fieldMeta.name}`
@@ -241,26 +283,15 @@ export function CubeList({
       doFetch: apiFetch,
     })
     if (result.status === "saved") {
-      // Only the patched key is merged: a concurrent, out-of-order response
-      // body must not overwrite the other columns of the row. A custom
-      // field's value lives in the row's `custom` sub-object, where the cell
-      // reads it back -- merging it flat would leave the cell showing "--"
-      // or the stale value until a full reload.
-      const merge = (r: Row): Row =>
-        fieldMeta.custom
-          ? {
-              ...r,
-              custom: {
-                ...((r.custom as Row | undefined) ?? {}),
-                [result.field]: result.value,
-              },
-            }
-          : { ...r, [result.field]: result.value }
+      // Only the patched key is merged (withSavedValue): a concurrent,
+      // out-of-order response body must not overwrite the other columns.
       setPage((p) =>
         p
           ? {
               ...p,
-              rows: p.rows.map((r) => (String(r.id) === String(row.id) ? merge(r) : r)),
+              rows: p.rows.map((r) =>
+                String(r.id) === String(row.id) ? withSavedValue(r, fieldMeta, result.value) : r,
+              ),
             }
           : p,
       )
@@ -278,46 +309,62 @@ export function CubeList({
 
   return (
     <div className="flex flex-col gap-4">
-      {createHref && (
-        <div className="flex justify-end">
-          <Button asChild>
-            <Link href={createHref}>{addLabel}</Link>
-          </Button>
-        </div>
+      {/* One toolbar: the prefix search and the exact filter fields wrap on a
+          narrow screen, the Add action keeps the trailing edge (no separate
+          row per control). A field the caller pins (fixedFilters) gets no
+          control here -- it is already applied server-side. */}
+      {controls && (createHref || controls.search || controls.filters.length > 0) && (
+      <div className="flex flex-wrap items-end gap-3">
+      {controls.search && (
+        <TextSearch
+          label="Search"
+          ariaLabel="Search (prefix match)"
+          value={prefix}
+          onChange={(v) => {
+            requery(() => setPrefix(v))
+            setOffset(0)
+          }}
+        />
       )}
-      {searchableFields
-        .filter((f) => !fixedFilters?.[f.name])
-        .map((f) =>
-          f.relation ? (
-            <RelationTypeahead
-              key={f.name}
-              field={f}
-              value={search[f.name] ?? ""}
-              onChange={(v) => {
-                requery(() => setSearch((s) => ({ ...s, [f.name]: v })))
-                setOffset(0)
-              }}
-            />
-          ) : (
-            <TextSearch
-              key={f.name}
-              field={f}
-              value={search[f.name] ?? ""}
-              onChange={(v) => {
-                requery(() => setSearch((s) => ({ ...s, [f.name]: v })))
-                setOffset(0)
-              }}
-            />
-          ),
-        )}
+      {controls.filters.map((f) =>
+        f.relation ? (
+          <RelationTypeahead
+            key={f.name}
+            field={f}
+            value={search[f.name] ?? ""}
+            onChange={(v) => {
+              requery(() => setSearch((s) => ({ ...s, [f.name]: v })))
+              setOffset(0)
+            }}
+          />
+        ) : (
+          <TextSearch
+            key={f.name}
+            label={f.label}
+            value={search[f.name] ?? ""}
+            onChange={(v) => {
+              requery(() => setSearch((s) => ({ ...s, [f.name]: v })))
+              setOffset(0)
+            }}
+          />
+        ),
+      )}
+      {createHref && (
+        <Button asChild className="ml-auto">
+          <Link href={createHref}>{addLabel}</Link>
+        </Button>
+      )}
+      </div>
+      )}
       {listError && <p role="alert">{listError}</p>}
       {page && page.rows.length === 0 ? (
         // The empty state replaces the silent empty table. A
         // wiped or never-populated cube gets the message and the create
         // action; a filtered search that finds nothing is a different
         // message, with the filters -- not the create button -- as the way
-        // out.
-        Object.keys(effectiveFilters).length > 0 ? (
+        // out. The prefix search narrows too; trimmed, because qwbe trims
+        // `q` and treats whitespace as no search.
+        prefix.trim() !== "" || Object.keys(effectiveFilters).length > 0 ? (
           <p className="text-sm text-muted-foreground">No rows match the current filters.</p>
         ) : (
           <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed p-8 text-center">
@@ -330,15 +377,16 @@ export function CubeList({
           </div>
         )
       ) : (
-      <Table>
+      <Table aria-label={`${meta.entity ?? cube} list`}>
         <TableHeader>
           <TableRow>
             {columns.map((column) => (
-              <TableHead key={column.field.name}>
+              <TableHead key={column.field.name} className="whitespace-nowrap">
                 {column.sortable ? (
                   <Button
                     variant="ghost"
                     size="sm"
+                    className="-ml-3"
                     onClick={() => toggleSort(column)}
                     aria-sort={sortBy === column.field.name ? (descending ? "descending" : "ascending") : "none"}
                   >
@@ -346,7 +394,7 @@ export function CubeList({
                     {sortBy === column.field.name ? (descending ? " ↓" : " ↑") : ""}
                   </Button>
                 ) : (
-                  column.field.label
+                  <span className="text-sm font-medium">{column.field.label}</span>
                 )}
               </TableHead>
             ))}
@@ -366,7 +414,7 @@ export function CubeList({
           {page?.rows.map((row) => (
             <TableRow key={String(row.id)}>
               {columns.map((column) => (
-                <TableCell key={column.field.name}>
+                <TableCell key={column.field.name} className="align-top">
                   <Cell
                     row={row}
                     column={column}
@@ -387,15 +435,15 @@ export function CubeList({
       </Table>
       )}
       {(!page || page.rows.length > 0) && (
-      <div className="flex items-center justify-between">
-        <span className="text-sm text-muted-foreground">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <span className="text-sm text-muted-foreground" aria-live="polite">
           {page
             ? total !== undefined
               ? `${page.offset + 1}-${page.offset + rowCount} of ${total}`
               : `${page.offset + 1}-${page.offset + rowCount}`
             : "loading"}
         </span>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Button
             variant="outline"
             size="sm"
@@ -405,7 +453,10 @@ export function CubeList({
             Previous
           </Button>
           {/* 2400 pages of Previous/Next is not navigation: the page number is
-              typed, and clamped to the last page whenever qwbe reports a total. */}
+              typed, committed on Enter or blur, and clamped to the last page
+              whenever qwbe reports a total. Enter followed by blur is one
+              request: after Enter the draft is gone, so the blur commits the
+              current page, which is a no-op. */}
           <label className="flex items-center gap-1 text-sm text-muted-foreground">
             Page
             <Input
@@ -414,12 +465,11 @@ export function CubeList({
               max={lastPage}
               className="w-20"
               aria-label="Page"
-              value={currentPage}
-              onChange={(e) => {
-                const wanted = Number(e.target.value)
-                if (!Number.isFinite(wanted) || wanted < 1) return
-                const clamped = lastPage === undefined ? wanted : Math.min(wanted, lastPage)
-                requery(() => setOffset((clamped - 1) * pageSize))
+              value={pageDraft ?? String(currentPage)}
+              onChange={(e) => setPageDraft(e.target.value)}
+              onBlur={commitPage}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitPage()
               }}
             />
             {lastPage !== undefined && <span>of {lastPage}</span>}
@@ -463,8 +513,10 @@ export function CubeList({
   )
 }
 
-// A searchable field the backend serves by exact equality. A text field gets a
-// text input; the value travels as the field's filter value.
+// A text filter control. For an exact-equality field the label names the
+// field; for the prefix search it is the bare "Search" the q contract owns.
+// The exact case is labeled, so a user is not misled into thinking the value
+// matches anywhere inside the field.
 //
 // The keystrokes stay local and only the pause reaches qwbe: the filter is an
 // exact-equality match, so every prefix of a word ("A", "Ac", "Acm") is a
@@ -473,11 +525,13 @@ export function CubeList({
 const FILTER_PAUSE_MS = 300
 
 function TextSearch({
-  field,
+  label,
+  ariaLabel,
   value,
   onChange,
 }: {
-  field: FieldMetadata
+  label: string
+  ariaLabel?: string
   value: string
   onChange: (value: string) => void
 }) {
@@ -488,11 +542,11 @@ function TextSearch({
     if (timer.current) clearTimeout(timer.current)
   }, [])
   return (
-    <div className="flex items-center gap-2">
-      <span className="text-sm text-muted-foreground">{field.label}</span>
+    <div className="flex w-full flex-col gap-1 sm:w-auto">
+      <span className="text-xs font-medium text-muted-foreground">{label}</span>
       <Input
-        className="w-64"
-        aria-label={`Filter by ${field.label}`}
+        className="w-full sm:w-64"
+        aria-label={ariaLabel ?? `Filter by ${label} (exact match)`}
         value={draft}
         onChange={(e) => {
           const next = e.target.value
@@ -603,7 +657,7 @@ function Cell({
   // cell, keep the full value in the title tooltip.
   const textValue = value === null || value === undefined ? null : String(value)
   const cellText = (node: React.ReactNode) => (
-    <span className="block max-w-48 truncate" title={textValue ?? undefined}>
+    <span className="block max-w-56 truncate sm:max-w-72" title={textValue ?? undefined}>
       {node}
     </span>
   )
@@ -668,13 +722,13 @@ function Cell({
           {content}
         </RelationLink>
       ) : isTitle && rowLink ? (
-        <Link className="underline" href={rowLink}>
+        <Link className="underline" href={rowLink} title={textValue ?? undefined}>
           {content}
         </Link>
       ) : editable ? (
         <button
           type="button"
-          className="cursor-text text-left"
+          className="min-h-9 cursor-text rounded-sm text-left hover:bg-muted/50 focus-visible:outline-2 focus-visible:outline-ring"
           title={`Edit ${field.label}`}
           // The accessible name must say what the button does; the cell value
           // alone left a screen reader no way to find the edit affordance.

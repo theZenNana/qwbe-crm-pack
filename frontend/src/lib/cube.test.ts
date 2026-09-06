@@ -19,21 +19,27 @@ import {
   cubeApiPath,
   errorMessage,
   errorBody,
+  groupFields,
   hrefForRelation,
   rowHref,
   listApiPath,
+  listControlsOf,
   listQueryString,
   renderKindOf,
   metadataApiPath,
+  OPENAPI_API_PATH,
+  recordApiPath,
   routeOf,
   saveCell,
   sortRequestFor,
+  withSavedValue,
   titleOf,
   type ColumnSpec,
   type CubeMetadata,
   type FieldMetadata,
   type PageOf,
   type Row,
+  pageFromInput,
   pageWindow,
 } from "./cube.ts"
 
@@ -105,6 +111,74 @@ describe("list request parameters", () => {
     assert.equal(parsed.get("limit"), "50")
     assert.equal(parsed.get("sortBy"), "name")
   })
+
+  it("sends the prefix search as q, a first-class list parameter", () => {
+    const parsed = new URLSearchParams(listQueryString({ q: "Ac", filters: { type: "Customer" } }))
+    assert.equal(parsed.get("q"), "Ac")
+    assert.equal(parsed.get("type"), "Customer")
+    // An empty q travels nowhere.
+    assert.equal(listQueryString({ q: "" }), "")
+  })
+
+  it("a field named q or sort never travels as a bare filter key", () => {
+    const parsed = new URLSearchParams(
+      listQueryString({ q: "Ac", filters: { q: "injected", sort: "evil", page: "9", pageSize: "1" } }),
+    )
+    assert.equal(parsed.get("q"), "Ac")
+    assert.equal(parsed.get("sort"), null)
+    assert.equal(parsed.get("page"), null)
+    assert.equal(parsed.get("pageSize"), null)
+  })
+})
+
+describe("list controls from the published contract", () => {
+  const orgField = field({ name: "organizationId", label: "Organization", relation: { target: "crm/organizations", entity: "Organization", summary: null } })
+  const nameField = field({ name: "name", label: "Name", searchable: true, required: true })
+  const emailField = field({ name: "email", label: "Email", searchable: true })
+  const contract = {
+    params: ["offset", "limit", "sortBy", "descending", "page", "pageSize", "sort", "q", "ids"],
+    maxPageSize: 200,
+    defaultPageSize: 25,
+    search: ["name", "email"],
+    filters: ["email", "name", "organizationId"],
+    sort: ["name", "email"],
+  }
+  const fields = [nameField, emailField, orgField]
+
+  it("derives one prefix search and the exact filters from the contract", () => {
+    const c = listControlsOf(fields, contract)
+    assert.equal(c.search, true)
+    // Relations are filters by construction (the contract lists them).
+    assert.deepEqual(c.filters.map((f) => f.name), ["email", "name", "organizationId"])
+  })
+
+  it("no contract search fields means no q control", () => {
+    const c = listControlsOf(fields, { ...contract, search: [] })
+    assert.equal(c.search, false)
+    assert.equal(c.filters.length, 3)
+  })
+
+  it("a fixed-filtered field gets no control of its own", () => {
+    const c = listControlsOf(fields, contract, { organizationId: "org-9" })
+    assert.deepEqual(c.filters.map((f) => f.name), ["email", "name"])
+  })
+
+  it("a field named like a list parameter is never admitted as a filter", () => {
+    const sneaky = [...fields, field({ name: "page", label: "Page", searchable: true })]
+    const c = listControlsOf(sneaky, { ...contract, filters: [...contract.filters, "page"] })
+    assert.equal(c.filters.some((f) => f.name === "page"), false)
+  })
+
+  it("a contract name the metadata does not publish is skipped", () => {
+    const c = listControlsOf(fields, { ...contract, filters: [...contract.filters, "ghost"] })
+    assert.equal(c.filters.some((f) => f.name === "ghost"), false)
+  })
+
+  it("without a contract it falls back to the searchable flags, no q", () => {
+    const c = listControlsOf(fields, null)
+    assert.equal(c.search, false)
+    assert.deepEqual(c.filters.map((f) => f.name), ["name", "email"])
+  })
 })
 
 describe("metadata paths", () => {
@@ -114,6 +188,21 @@ describe("metadata paths", () => {
 
   it("reaches rows through the proxy under the cube's served prefix", () => {
     assert.equal(cubeApiPath("crm/contacts", "/ct-1"), "/api/qwbe/contacts/ct-1")
+  })
+
+  // QWB-55 Schema & API panel: every link stays on the same-origin proxy, the
+  // record id is ONE encoded segment (no traversal, no extra segments), and an
+  // empty id yields no link rather than the list endpoint.
+  it("builds panel links on the proxy with an encoded record id", () => {
+    assert.equal(recordApiPath("crm/organizations", "org-1"), "/api/qwbe/organizations/org-1")
+    assert.equal(recordApiPath("crm/organizations", "a/b"), "/api/qwbe/organizations/a%2Fb")
+    assert.equal(recordApiPath("crm/organizations", "../auth"), "/api/qwbe/organizations/..%2Fauth")
+    assert.equal(recordApiPath("crm/organizations", ""), null)
+    assert.equal(recordApiPath("crm/organizations", ".."), null)
+    assert.equal(OPENAPI_API_PATH, "/api/qwbe/openapi.json")
+    for (const href of [recordApiPath("crm/organizations", "x")!, metadataApiPath("crm/organizations"), OPENAPI_API_PATH]) {
+      assert.ok(href.startsWith("/api/qwbe/") && !href.includes("token") && !href.includes("http"))
+    }
   })
 })
 
@@ -562,6 +651,27 @@ describe("pageWindow", () => {
   })
 })
 
+// The "Page" box commits what a human typed (QWB-59 F3): a whole number lands
+// on that page, clamped to the range; anything else is rejected so the box
+// falls back to the current page instead of jumping somewhere.
+describe("pageFromInput", () => {
+  it("accepts whole numbers and clamps them into 1..lastPage", () => {
+    assert.equal(pageFromInput("5", 2400), 5)
+    assert.equal(pageFromInput(" 5 ", 2400), 5)
+    assert.equal(pageFromInput("9999", 2400), 2400)
+    assert.equal(pageFromInput("0", 2400), 1)
+    assert.equal(pageFromInput("-3", 2400), 1)
+    // No total yet: no upper bound to clamp to.
+    assert.equal(pageFromInput("9999", undefined), 9999)
+  })
+
+  it("rejects what is not a whole number", () => {
+    for (const raw of ["", "  ", "2.5", "abc", "1e400", "Infinity", "NaN"]) {
+      assert.equal(pageFromInput(raw, 10), undefined, JSON.stringify(raw))
+    }
+  })
+})
+
 describe("the create payload", () => {
   const orgFields = [
     field({ name: "name", label: "Name", required: true }),
@@ -627,5 +737,86 @@ describe("the create payload", () => {
   it("reports a required enum left unchosen by its label", () => {
     const { missing } = createPayloadOf(vatFields, { name: "Acme", tva: "true" })
     assert.deepEqual(missing, ["Form"])
+  })
+})
+
+// The detail page's fieldsets (QWB-53): a layout hint by field NAME over the
+// published metadata, never a second schema. The rule under test: nothing the
+// metadata publishes is lost, whatever the groups name.
+describe("detail field groups", () => {
+  const published = [
+    field({ name: "name", required: true }),
+    field({ name: "phone" }),
+    field({ name: "billingCity" }),
+    field({ name: "id", editable: false }),
+    field({ name: "tva", type: "boolean", custom: true }),
+  ]
+  const groups = [
+    { legend: "Organization", fields: ["name", "renamedAway"] },
+    { legend: "Contact details", fields: ["phone", "name"] },
+    { legend: "Empty", fields: ["nothingHere"] },
+  ]
+
+  it("places named fields in metadata-backed groups, in the group's order", () => {
+    const sections = groupFields(published, groups)
+    assert.deepEqual(
+      sections.map((s) => [s.legend, s.fields.map((f) => f.name)]),
+      [
+        ["Organization", ["name"]],
+        ["Contact details", ["phone"]],
+        ["Other", ["billingCity", "id"]],
+        ["Custom fields", ["tva"]],
+      ],
+    )
+  })
+
+  it("skips a name the metadata no longer publishes and drops an empty group", () => {
+    const legends = groupFields(published, groups).map((s) => s.legend)
+    assert.ok(!legends.includes("Empty"))
+  })
+
+  it("never places a field twice", () => {
+    const all = groupFields(published, groups).flatMap((s) => s.fields.map((f) => f.name))
+    assert.deepEqual([...new Set(all)].length, all.length)
+    assert.deepEqual(all.length, published.length)
+  })
+
+  it("a new custom field appears without a frontend change", () => {
+    const tomorrow = [...published, field({ name: "cui", custom: true })]
+    const custom = groupFields(tomorrow, groups).find((s) => s.legend === "Custom fields")!
+    assert.deepEqual(custom.fields.map((f) => f.name), ["tva", "cui"])
+  })
+
+  it("carries the caller's emphasis flag on that section only", () => {
+    const sections = groupFields(published, [{ ...groups[0], important: true }, groups[1]])
+    assert.deepEqual(sections.map((s) => s.important ?? false), [true, false, false, false])
+  })
+
+  it("without groups every field is a leftover, so nothing changes for a page that passes none", () => {
+    assert.deepEqual(
+      groupFields(published, []).map((s) => [s.legend, s.fields.length]),
+      [["Other", 4], ["Custom fields", 1]],
+    )
+  })
+})
+
+// The saved value is merged where the field lives, and ONLY that key: the
+// list and the detail page share this merge.
+describe("withSavedValue", () => {
+  const row: Row = { id: "r1", name: "Acme", phone: "1", custom: { tva: false, cui: "x" } }
+
+  it("merges a static field at the top level and keeps the rest", () => {
+    assert.deepEqual(withSavedValue(row, field({ name: "phone" }), "2"), { ...row, phone: "2" })
+  })
+
+  it("merges a custom field inside `custom` without dropping its siblings", () => {
+    const saved = withSavedValue(row, field({ name: "tva", type: "boolean", custom: true }), true)
+    assert.deepEqual(saved.custom, { tva: true, cui: "x" })
+    assert.equal(saved.name, "Acme")
+  })
+
+  it("creates the `custom` sub-object when the row had none", () => {
+    const bare: Row = { id: "r2", name: "Bare" }
+    assert.deepEqual(withSavedValue(bare, field({ name: "cui", custom: true }), "y").custom, { cui: "y" })
   })
 })

@@ -12,6 +12,7 @@
 import { useState } from "react"
 
 import { CustomFieldsPanel } from "@/components/custom-fields-panel"
+import { Label } from "@/components/ui/label"
 import {
   Select,
   SelectContent,
@@ -34,10 +35,10 @@ export default function SettingsPage() {
   return (
     <main className="mx-auto flex w-full max-w-7xl flex-col gap-4 p-4">
       <h1 className="text-xl font-semibold">Settings</h1>
-      <div className="flex items-center gap-2">
-        <span className="text-sm text-muted-foreground">Entity</span>
+      <div className="flex flex-wrap items-center gap-2">
+        <Label htmlFor="settings-entity">Entity</Label>
         <Select value={cube} onValueChange={setCube}>
-          <SelectTrigger className="w-48" aria-label="Entity">
+          <SelectTrigger id="settings-entity" className="w-full sm:w-48">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -49,7 +50,9 @@ export default function SettingsPage() {
           </SelectContent>
         </Select>
       </div>
-      <CustomFieldsPanel cube={cube} />
+      {/* key remounts the panel on cube switch so no definition list, error
+          or open delete confirmation of the previous cube survives (QWB-60). */}
+      <CustomFieldsPanel key={cube} cube={cube} />
     </main>
   )
 }

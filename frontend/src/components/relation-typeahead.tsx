@@ -194,12 +194,16 @@ export function RelationTypeahead({
   const clearLabel = variant === "form" ? `Clear ${field.label}` : `Clear ${field.label} filter`
 
   return (
-    <div className="flex items-center gap-2">
-      <span className="text-sm text-muted-foreground">{field.label}</span>
+    // The filter variant shares the list toolbar's shape (label above, full
+    // width on a phone); the form variant keeps the form's own row.
+    <div className={variant === "filter" ? "flex w-full flex-col gap-1 sm:w-auto" : "flex items-center gap-2"}>
+      <span className={variant === "filter" ? "text-xs font-medium text-muted-foreground" : "text-sm text-muted-foreground"}>
+        {field.label}
+      </span>
       <div className="relative" ref={rootRef}>
         <div className="flex items-center gap-1">
           <Input
-            className="w-64"
+            className="w-full sm:w-64"
             role="combobox"
             aria-label={variant === "form" ? field.label : `Filter by ${field.label}`}
             aria-expanded={open}

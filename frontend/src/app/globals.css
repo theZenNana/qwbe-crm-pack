@@ -2,6 +2,12 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
+/* The shadcn-admin-kit components ship as one bundled JS file (QWB-54); their
+   class names must be scanned for Tailwind to generate the utilities. The kit's
+   own CSS is NOT imported: it redefines the theme variables this app already
+   owns, and the kit's components use the same shadcn token names. */
+@source "../../node_modules/shadcn-admin-kit/dist";
+
 :root {
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);

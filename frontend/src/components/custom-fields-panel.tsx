@@ -39,8 +39,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { Field, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import {
   Select,
   SelectContent,
@@ -48,6 +48,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Skeleton } from "@/components/ui/skeleton"
 import {
   Table,
   TableBody,
@@ -84,16 +85,6 @@ const acceptedFieldTypes = (): Promise<string[]> => {
     })
     .catch(() => FIELD_TYPES_FALLBACK)
   return openApiTypes
-}
-
-// The permission check is shared too: every CubeList would otherwise fire its
-// own /auth/me per panel.
-let meCheck: Promise<{ permissions?: string[] } | null> | null = null
-const myPermissions = (): Promise<{ permissions?: string[] } | null> => {
-  meCheck ??= apiFetch("/api/qwbe/auth/me")
-    .then(async (r) => (r.ok ? ((await r.json()) as { permissions?: string[] }) : null))
-    .catch(() => null)
-  return meCheck
 }
 
 // One definition as the customfields list endpoint returns it (a row of the
@@ -138,10 +129,13 @@ export function CustomFieldsPanel({
   }
 
   // Permission check first: without customfields:write this component renders
-  // the message instead of management UI.
+  // the message instead of management UI. Fetched per mount, not cached at
+  // module level: a cached failure would pin "no permission" for the whole
+  // SPA lifetime, and the page mounts one panel at a time (QWB-60).
   useEffect(() => {
     let alive = true
-    myPermissions()
+    apiFetch("/api/qwbe/auth/me")
+      .then(async (r) => (r.ok ? ((await r.json()) as { permissions?: string[] }) : null))
       .then((me) => {
         if (alive) setAllowed(canDefineFields(me?.permissions ?? []))
       })
@@ -175,8 +169,13 @@ export function CustomFieldsPanel({
         return (await r.json()) as { rows?: CustomFieldDef[] }
       })
       .then((p) => {
-        if (alive)
-          setDefs((p.rows ?? []).filter((d) => d.deleted === false && d.targetCube === cube))
+        if (!alive) return
+        // A stale error from another cube (or a failed earlier load) must not
+        // outlive the reload that replaces it. Cleared on the response, not
+        // synchronously: this runs from an effect too, and a synchronous
+        // set-state there is what react-hooks/set-state-in-effect forbids.
+        setError(null)
+        setDefs((p.rows ?? []).filter((d) => d.deleted === false && d.targetCube === cube))
       })
       .catch((e: unknown) => {
         if (alive) setError(e instanceof Error ? e.message : String(e))
@@ -188,105 +187,132 @@ export function CustomFieldsPanel({
   // must not set state on a dead component.
   useEffect(() => loadDefs(), [loadDefs])
 
-  if (allowed === null) return null
+  if (allowed === null) return <Skeleton className="h-40 w-full" aria-label="Loading" />
   if (!allowed)
     return (
-      <p className="text-sm text-muted-foreground">
-        Custom fields are managed with the customfields:write permission, which
-        this account does not have.
-      </p>
+      <Card>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">
+            Custom fields are managed with the customfields:write permission, which
+            this account does not have.
+          </p>
+        </CardContent>
+      </Card>
     )
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Custom fields</CardTitle>
-        <CardDescription>
-          Fields defined at runtime for this entity. They appear in the list,
-          the detail page and inline edit as soon as they are defined.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4">
-            {error && (
-              <p role="alert" className="text-sm text-destructive">
-                {error}
-              </p>
-            )}
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Required</TableHead>
-                  <TableHead>Hidden on lists</TableHead>
-                  <TableHead>Default value</TableHead>
-                  <TableHead>Options</TableHead>
-                  <TableHead>
-                    <span className="sr-only">Actions</span>
-                  </TableHead>
+    <div className="flex flex-col gap-4">
+      {error && (
+        <p role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {error}
+        </p>
+      )}
+      <Card>
+        <CardHeader>
+          <CardTitle>Custom fields</CardTitle>
+          <CardDescription>
+            Fields defined at runtime for this entity. They appear in the list,
+            the detail page and inline edit as soon as they are defined.
+            &quot;Hidden on lists&quot; and &quot;Default value&quot; are
+            preferences of this browser only, not part of the definition.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {/* The Table wrapper scrolls horizontally on its own and the Card
+              clips overflow, so a wide table never widens the page. */}
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead>Type</TableHead>
+                <TableHead>Required</TableHead>
+                <TableHead>Hidden on lists</TableHead>
+                <TableHead>Default value</TableHead>
+                <TableHead>Options</TableHead>
+                <TableHead>
+                  <span className="sr-only">Actions</span>
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {(defs ?? []).map((d) => (
+                <TableRow key={d.id}>
+                  <TableCell className="font-medium">{d.label || d.name}</TableCell>
+                  <TableCell>{d.fieldType}</TableCell>
+                  <TableCell>{d.required ? "yes" : "no"}</TableCell>
+                  <TableCell>
+                    {/* hide != delete (F2): the definition and every stored
+                        value stay; this browser just drops the field from
+                        the list columns. */}
+                    <Checkbox
+                      aria-label={`Hide ${d.label || d.name} on lists`}
+                      checked={prefs.hidden.includes(d.name)}
+                      onCheckedChange={(checked) =>
+                        changePrefs(withHidden(prefs, d.name, checked === true))
+                      }
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <DefaultValueEditor
+                      def={d}
+                      value={prefs.defaults[d.name] ?? ""}
+                      onChange={(v) => changePrefs(withDefault(prefs, d.name, v))}
+                    />
+                  </TableCell>
+                  <TableCell
+                    className="max-w-xs truncate"
+                    title={d.options.length > 0 ? d.options.join(", ") : undefined}
+                  >
+                    {d.options.length > 0 ? d.options.join(", ") : "—"}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <DeleteButton
+                      id={d.id}
+                      name={d.label || d.name}
+                      cube={cube}
+                      fieldName={d.name}
+                      onDeleted={() => loadDefs()}
+                      onError={setError}
+                    />
+                  </TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(defs ?? []).map((d) => (
-                  <TableRow key={d.id}>
-                    <TableCell>{d.label || d.name}</TableCell>
-                    <TableCell>{d.fieldType}</TableCell>
-                    <TableCell>{d.required ? "yes" : "no"}</TableCell>
-                    <TableCell>
-                      {/* hide != delete (F2): the definition and every stored
-                          value stay; this browser just drops the field from
-                          the list columns. */}
-                      <Checkbox
-                        aria-label={`Hide ${d.label || d.name} on lists`}
-                        checked={prefs.hidden.includes(d.name)}
-                        onCheckedChange={(checked) =>
-                          changePrefs(withHidden(prefs, d.name, checked === true))
-                        }
-                      />
-                    </TableCell>
-                    <TableCell>
-                      <DefaultValueEditor
-                        def={d}
-                        value={prefs.defaults[d.name] ?? ""}
-                        onChange={(v) => changePrefs(withDefault(prefs, d.name, v))}
-                      />
-                    </TableCell>
-                    <TableCell>{d.options.length > 0 ? d.options.join(", ") : "—"}</TableCell>
-                    <TableCell>
-                      <DeleteButton
-                        id={d.id}
-                        name={d.label || d.name}
-                        cube={cube}
-                        fieldName={d.name}
-                        onDeleted={() => {
-                          setError(null)
-                          loadDefs()
-                        }}
-                        onError={setError}
-                      />
-                    </TableCell>
-                  </TableRow>
-                ))}
-                {defs !== null && defs.length === 0 && (
-                  <TableRow>
-                    <TableCell colSpan={7} className="text-muted-foreground">
-                      No custom fields defined.
-                    </TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
-            <DefineForm
-              cube={cube}
-              fieldTypes={fieldTypes ?? FIELD_TYPES_FALLBACK}
-              onDefined={() => {
-                setError(null)
-                loadDefs()
-              }}
-              onError={setError}
-            />
-          </CardContent>
-        </Card>
+              ))}
+              {defs === null && !error && (
+                <TableRow>
+                  <TableCell colSpan={7} className="text-muted-foreground">
+                    Loading...
+                  </TableCell>
+                </TableRow>
+              )}
+              {defs !== null && defs.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={7} className="text-muted-foreground">
+                    No custom fields defined.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>Add a field</CardTitle>
+          <CardDescription>
+            The name is the key stored on every row; the label is what users
+            see. A select needs its options, comma-separated.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <DefineForm
+            cube={cube}
+            fieldTypes={fieldTypes ?? FIELD_TYPES_FALLBACK}
+            onDefined={() => loadDefs()}
+            onError={setError}
+          />
+        </CardContent>
+      </Card>
+    </div>
   )
 }
 
@@ -310,30 +336,47 @@ function DeleteButton({
   // stored value, so the first click only SCANS and asks: how many rows in
   // the first 200 of the target carry a value, which this delete would leave
   // behind as orphans (the pack's orphan report surfaces them afterwards).
-  const [confirming, setConfirming] = useState<number | null>(null)
+  // "unknown" = the scan itself failed; the user is told so rather than shown
+  // a reassuring zero.
+  // ponytail: qwbe caps every list at 200 rows (kernel MAX_LIMIT) and has no
+  // filter or count on custom keys, so a full orphan count needs a backend
+  // slice (a `custom.<key>` presence filter or a count route). Until then the
+  // message carries the cube total next to the partial count, so a 60k-row
+  // cube never reads as fully scanned.
+  const [confirming, setConfirming] = useState<
+    { carrying: number; scanned: number; total: number | undefined } | "unknown" | null
+  >(null)
   const beginConfirm = async () => {
     setBusy(true)
     try {
       const r = await apiFetch(`/api/qwbe/${httpPrefixOf(cube)}?limit=200`)
-      let carrying = 0
-      if (r.ok) {
-        const p = (await r.json()) as { rows?: Row[] }
-        carrying = (p.rows ?? []).filter((row) => {
-          const custom = row.custom
-          const v = custom && typeof custom === "object" ? (custom as Row)[fieldName] : undefined
-          return v !== undefined && v !== null && v !== ""
-        }).length
+      if (!r.ok) {
+        setConfirming("unknown")
+        return
       }
-      setConfirming(carrying)
+      const p = (await r.json()) as { rows?: Row[]; total?: number }
+      const rows = p.rows ?? []
+      const carrying = rows.filter((row) => {
+        const custom = row.custom
+        const v = custom && typeof custom === "object" ? (custom as Row)[fieldName] : undefined
+        return v !== undefined && v !== null && v !== ""
+      }).length
+      setConfirming({ carrying, scanned: rows.length, total: p.total })
+    } catch {
+      setConfirming("unknown")
     } finally {
       setBusy(false)
     }
   }
   if (confirming !== null) {
     return (
-      <span className="flex items-center gap-1">
+      <span className="flex flex-wrap items-center justify-end gap-1">
         <span className="text-xs text-muted-foreground">
-          {confirming} row(s) in the first 200 carry a value; they become orphans.
+          {confirming === "unknown"
+            ? "Could not count rows carrying a value; any that do become orphans."
+            : confirming.total !== undefined && confirming.total > confirming.scanned
+              ? `${confirming.carrying} of the first ${confirming.scanned} row(s) carry a value; ${confirming.total - confirming.scanned} more row(s) were not scanned. Every value becomes an orphan.`
+              : `${confirming.carrying} of ${confirming.scanned} row(s) carry a value; they become orphans.`}
         </span>
         <Button
           variant="destructive"
@@ -498,32 +541,32 @@ function DefineForm({
         }
       }}
     >
+      {/* Field is w-full by design; the width classes keep the row's
+          wrap layout, so the form stays one line on a wide screen. */}
       <div className="flex flex-wrap items-end gap-3">
-        <div className="flex flex-col gap-1">
-          <Label htmlFor="cf-name">Name</Label>
+        <Field className="w-48">
+          <FieldLabel htmlFor="cf-name">Name</FieldLabel>
           <Input
             id="cf-name"
-            className="w-48"
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="e.g. lead_source"
             required
           />
-        </div>
-        <div className="flex flex-col gap-1">
-          <Label htmlFor="cf-label">Label</Label>
+        </Field>
+        <Field className="w-48">
+          <FieldLabel htmlFor="cf-label">Label</FieldLabel>
           <Input
             id="cf-label"
-            className="w-48"
             value={label}
             onChange={(e) => setLabel(e.target.value)}
             placeholder="optional"
           />
-        </div>
-        <div className="flex flex-col gap-1">
-          <Label htmlFor="cf-type">Type</Label>
+        </Field>
+        <Field className="w-32">
+          <FieldLabel htmlFor="cf-type">Type</FieldLabel>
           <Select value={fieldType} onValueChange={setFieldType}>
-            <SelectTrigger id="cf-type" className="w-32">
+            <SelectTrigger id="cf-type">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -534,28 +577,27 @@ function DefineForm({
               ))}
             </SelectContent>
           </Select>
-        </div>
+        </Field>
         {fieldType === "select" && (
-          <div className="flex flex-col gap-1">
-            <Label htmlFor="cf-options">Options (comma-separated)</Label>
+          <Field className="w-64">
+            <FieldLabel htmlFor="cf-options">Options (comma-separated)</FieldLabel>
             <Input
               id="cf-options"
-              className="w-64"
               value={options}
               onChange={(e) => setOptions(e.target.value)}
               placeholder="email, phone"
               required
             />
-          </div>
+          </Field>
         )}
-        <div className="flex items-center gap-2 pb-2">
+        <Field orientation="horizontal" className="w-auto pb-2">
           <Checkbox
             id="cf-required"
             checked={required}
             onCheckedChange={(c) => setRequired(c === true)}
           />
-          <Label htmlFor="cf-required">Required</Label>
-        </div>
+          <FieldLabel htmlFor="cf-required">Required</FieldLabel>
+        </Field>
         <Button type="submit" size="sm" disabled={busy} className="mb-0.5">
           Add field
         </Button>
