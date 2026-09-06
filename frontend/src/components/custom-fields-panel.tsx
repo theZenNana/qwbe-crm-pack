@@ -87,16 +87,6 @@ const acceptedFieldTypes = (): Promise<string[]> => {
   return openApiTypes
 }
 
-// The permission check is shared too: every CubeList would otherwise fire its
-// own /auth/me per panel.
-let meCheck: Promise<{ permissions?: string[] } | null> | null = null
-const myPermissions = (): Promise<{ permissions?: string[] } | null> => {
-  meCheck ??= apiFetch("/api/qwbe/auth/me")
-    .then(async (r) => (r.ok ? ((await r.json()) as { permissions?: string[] }) : null))
-    .catch(() => null)
-  return meCheck
-}
-
 // One definition as the customfields list endpoint returns it (a row of the
 // pack's own table; deleted definitions are soft-deleted and filtered here).
 export type CustomFieldDef = {
@@ -139,10 +129,13 @@ export function CustomFieldsPanel({
   }
 
   // Permission check first: without customfields:write this component renders
-  // the message instead of management UI.
+  // the message instead of management UI. Fetched per mount, not cached at
+  // module level: a cached failure would pin "no permission" for the whole
+  // SPA lifetime, and the page mounts one panel at a time (QWB-60).
   useEffect(() => {
     let alive = true
-    myPermissions()
+    apiFetch("/api/qwbe/auth/me")
+      .then(async (r) => (r.ok ? ((await r.json()) as { permissions?: string[] }) : null))
       .then((me) => {
         if (alive) setAllowed(canDefineFields(me?.permissions ?? []))
       })

@@ -52,7 +52,9 @@ import {
 } from "@/lib/cube.ts"
 import {
   changedPayloadOf,
+  copyText,
   displayRowOf,
+  escapeCancels,
   fieldsInEditOf,
   initialValuesOf,
   type EditScope,
@@ -135,6 +137,14 @@ export function CubeKitShow({
     [fieldsInEdit, flatRow],
   )
 
+  // Opening a draft drops any refusal left by an earlier one (a save that
+  // answered after its form was already closed), so it cannot surface under
+  // the wrong field.
+  function open(scope: Exclude<EditScope, null>) {
+    setRefusal(null)
+    setEditing(scope)
+  }
+
   function cancel() {
     const closed = editing
     setRefusal(null)
@@ -198,7 +208,7 @@ export function CubeKitShow({
                 className="size-9 shrink-0 text-muted-foreground"
                 aria-label={`Edit ${field.label}`}
                 data-edit-field={field.name}
-                onClick={() => setEditing(field.name)}
+                onClick={() => open(field.name)}
               >
                 <PencilIcon aria-hidden />
               </Button>
@@ -210,13 +220,14 @@ export function CubeKitShow({
   )
 
   // One field open in place: its kit input, focused, with its own Save/Cancel
-  // and the refusal right under it. Escape cancels this draft.
+  // and the refusal right under it. Escape cancels this draft, except while
+  // its save is pending (like the disabled buttons).
   const single = (field: FieldMetadata) => (
     <FocusOnMount
       key={field.name}
       className="flex min-w-0 flex-col gap-2"
       onKeyDown={(e) => {
-        if (e.key === "Escape") {
+        if (escapeCancels(e.key, isPending)) {
           e.preventDefault()
           cancel()
         }
@@ -288,7 +299,7 @@ export function CubeKitShow({
             <>
               {editableFields.length > 0 && (
                 <div className="flex justify-end">
-                  <Button variant="outline" onClick={() => setEditing("all")}>
+                  <Button variant="outline" onClick={() => open("all")}>
                     Edit
                   </Button>
                 </div>
@@ -360,15 +371,13 @@ function refusalTextOf(e: unknown, fields: readonly FieldMetadata[]): string {
 
 // A discreet copy action next to a value: named for screen readers, sized
 // for a finger (36px), never enters edit mode, reports a clipboard refusal
-// (insecure context, denied permission) instead of failing silently.
+// (no Clipboard API on an insecure origin, denied permission) instead of
+// failing silently.
 function CopyButton({ label, text }: { label: string; text: string }) {
   async function copy() {
-    try {
-      await navigator.clipboard.writeText(text)
-      toast.success(`${label} copied`)
-    } catch (e: unknown) {
-      toast.error(`Copy failed: ${e instanceof Error ? e.message : String(e)}`)
-    }
+    const failure = await copyText(text)
+    if (failure === null) toast.success(`${label} copied`)
+    else toast.error(`Copy failed: ${failure}`)
   }
   return (
     <Button

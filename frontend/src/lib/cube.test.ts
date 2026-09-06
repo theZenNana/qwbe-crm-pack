@@ -39,6 +39,7 @@ import {
   type FieldMetadata,
   type PageOf,
   type Row,
+  pageFromInput,
   pageWindow,
 } from "./cube.ts"
 
@@ -647,6 +648,27 @@ describe("pageWindow", () => {
   it("has one page for an empty cube and none at all without a total", () => {
     assert.deepEqual(pageWindow(0, 25, 0), { currentPage: 1, lastPage: 1 })
     assert.deepEqual(pageWindow(50, 25, undefined), { currentPage: 3, lastPage: undefined })
+  })
+})
+
+// The "Page" box commits what a human typed (QWB-59 F3): a whole number lands
+// on that page, clamped to the range; anything else is rejected so the box
+// falls back to the current page instead of jumping somewhere.
+describe("pageFromInput", () => {
+  it("accepts whole numbers and clamps them into 1..lastPage", () => {
+    assert.equal(pageFromInput("5", 2400), 5)
+    assert.equal(pageFromInput(" 5 ", 2400), 5)
+    assert.equal(pageFromInput("9999", 2400), 2400)
+    assert.equal(pageFromInput("0", 2400), 1)
+    assert.equal(pageFromInput("-3", 2400), 1)
+    // No total yet: no upper bound to clamp to.
+    assert.equal(pageFromInput("9999", undefined), 9999)
+  })
+
+  it("rejects what is not a whole number", () => {
+    for (const raw of ["", "  ", "2.5", "abc", "1e400", "Infinity", "NaN"]) {
+      assert.equal(pageFromInput(raw, 10), undefined, JSON.stringify(raw))
+    }
   })
 })
 

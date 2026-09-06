@@ -286,6 +286,17 @@ export function pageWindow(
   }
 }
 
+// The page a typed "Page" value asks for: a whole number clamped to
+// 1..lastPage (no upper clamp while qwbe has not reported a total). Anything
+// that is not a whole number -- empty, "2.5", "abc", Infinity -- is undefined,
+// and the caller restores the current page instead of requesting one.
+export function pageFromInput(raw: string, lastPage: number | undefined): number | undefined {
+  const text = raw.trim()
+  const n = Number(text)
+  if (text === "" || !Number.isInteger(n)) return undefined
+  return Math.max(1, lastPage === undefined ? n : Math.min(n, lastPage))
+}
+
 export function sortRequestFor(
   column: ColumnSpec,
   currentSortBy: string | undefined,

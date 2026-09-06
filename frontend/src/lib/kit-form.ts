@@ -116,3 +116,31 @@ export function changedPayloadOf(
   )
   return updatePayloadOf(changed, values)
 }
+
+// Whether a key press closes the single-field draft: Escape, but only while
+// no save is in flight. Cancelling under a pending request unmounts the form
+// while the request still runs, so a later refusal would land with nothing to
+// show it on (the Save/Cancel buttons are disabled for the same reason).
+export function escapeCancels(key: string, pending: boolean): boolean {
+  return key === "Escape" && !pending
+}
+
+// Copies text through the Clipboard API and returns the failure text, or
+// null on success. The API is absent outside secure contexts (the lab UI
+// reached over plain http by LAN address), where `navigator.clipboard` is
+// undefined; that case is reported in words instead of throwing on
+// `undefined.writeText`. It does not make copying work there.
+export const CLIPBOARD_UNAVAILABLE = "Copy needs https or localhost"
+
+export async function copyText(
+  text: string,
+  clipboard: Pick<Clipboard, "writeText"> | undefined = globalThis.navigator?.clipboard,
+): Promise<string | null> {
+  if (!clipboard) return CLIPBOARD_UNAVAILABLE
+  try {
+    await clipboard.writeText(text)
+    return null
+  } catch (e: unknown) {
+    return e instanceof Error ? e.message : String(e)
+  }
+}

@@ -50,7 +50,9 @@ export default function SettingsPage() {
           </SelectContent>
         </Select>
       </div>
-      <CustomFieldsPanel cube={cube} />
+      {/* key remounts the panel on cube switch so no definition list, error
+          or open delete confirmation of the previous cube survives (QWB-60). */}
+      <CustomFieldsPanel key={cube} cube={cube} />
     </main>
   )
 }

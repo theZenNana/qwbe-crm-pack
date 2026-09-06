@@ -12,8 +12,10 @@ import {
   sessionCookieName,
 } from "./session.ts"
 
+const futureExpiry = new Date(Date.now() + 86_400_000).toISOString()
+
 const okLogin = async () =>
-  new Response(JSON.stringify({ token: "tok-1", expiresAt: "2026-09-06T00:00:00Z" }), {
+  new Response(JSON.stringify({ token: "tok-1", expiresAt: futureExpiry }), {
     status: 200,
   })
 
@@ -38,17 +40,17 @@ describe("sessionCookieName", () => {
 
 describe("sessionCookie", () => {
   it("is httpOnly, lax, path-scoped to the api prefix and expires with the token", () => {
-    const cookie = sessionCookie("tok-1", "2026-09-06T00:00:00Z", true, "localhost:4510")
+    const cookie = sessionCookie("tok-1", futureExpiry, true, "localhost:4510")
     assert.equal(cookie.name, "qwbe_session_4510")
     assert.equal(cookie.httpOnly, true)
     assert.equal(cookie.sameSite, "lax")
     assert.equal(cookie.secure, true)
     assert.equal(cookie.path, COOKIE_PATH)
-    assert.equal(cookie.expires.toISOString(), "2026-09-06T00:00:00.000Z")
+    assert.equal(cookie.expires.toISOString(), futureExpiry)
   })
 
   it("is not secure outside production", () => {
-    assert.equal(sessionCookie("tok-1", "2026-09-06T00:00:00Z", false).secure, false)
+    assert.equal(sessionCookie("tok-1", futureExpiry, false).secure, false)
   })
 })
 
@@ -69,7 +71,7 @@ describe("expireSessionCookie", () => {
 describe("loginToQwbe", () => {
   it("returns the token and expiry on a good login", async () => {
     const result = await loginToQwbe("http://qwbe.test", "u", "p", okLogin)
-    assert.deepEqual(result, { ok: true, token: "tok-1", expiresAt: "2026-09-06T00:00:00Z" })
+    assert.deepEqual(result, { ok: true, token: "tok-1", expiresAt: futureExpiry })
   })
 
   it("surfaces the qwbe error message on a wrong password", async () => {

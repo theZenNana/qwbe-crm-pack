@@ -32,6 +32,7 @@ import {
   listApiPath,
   listControlsOf,
   metadataApiPath,
+  pageFromInput,
   pageWindow,
   saveCell,
   sortRequestFor,
@@ -104,6 +105,11 @@ export function CubeList({
   // The prefix search over the cube's declared search fields, sent as `q`.
   const [prefix, setPrefix] = useState("")
   const [edit, setEdit] = useState<EditState | null>(null)
+  // What is typed into the "Page" box before it is committed (Enter or blur);
+  // null shows the current page. Keeping the draft apart from the offset lets
+  // a user clear and retype, and a rejected or same-page commit just drops the
+  // draft, so the box shows the current page again without a request.
+  const [pageDraft, setPageDraft] = useState<string | null>(null)
   // Per-cell error messages from a failed PATCH, keyed "id:field".
   const [cellErrors, setCellErrors] = useState<Record<string, string>>({})
   // False until the client has hydrated: before that, a click on a rendered
@@ -177,7 +183,13 @@ export function CubeList({
         return (await r.json()) as PageOf<Row>
       })
       .then((p) => {
-        if (alive) setPage(p)
+        // A success for the CURRENT request retires the alert of an earlier
+        // failure; a response for a superseded request (alive false) neither
+        // shows a page nor clears an error it did not cause.
+        if (alive) {
+          setPage(p)
+          setListError(null)
+        }
       })
       .catch((e: unknown) => {
         if (alive) setListError(e instanceof Error ? e.message : String(e))
@@ -248,6 +260,14 @@ export function CubeList({
       setDescending(next.descending)
       setOffset(0)
     })
+  }
+
+  const commitPage = () => {
+    if (pageDraft === null) return
+    const wanted = pageFromInput(pageDraft, lastPage)
+    setPageDraft(null)
+    if (wanted === undefined || wanted === currentPage) return
+    requery(() => setOffset((wanted - 1) * pageSize))
   }
 
   const saveEdit = async (row: Row, fieldMeta: FieldMetadata, next: string) => {
@@ -342,8 +362,9 @@ export function CubeList({
         // wiped or never-populated cube gets the message and the create
         // action; a filtered search that finds nothing is a different
         // message, with the filters -- not the create button -- as the way
-        // out.
-        Object.keys(effectiveFilters).length > 0 ? (
+        // out. The prefix search narrows too; trimmed, because qwbe trims
+        // `q` and treats whitespace as no search.
+        prefix.trim() !== "" || Object.keys(effectiveFilters).length > 0 ? (
           <p className="text-sm text-muted-foreground">No rows match the current filters.</p>
         ) : (
           <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed p-8 text-center">
@@ -432,7 +453,10 @@ export function CubeList({
             Previous
           </Button>
           {/* 2400 pages of Previous/Next is not navigation: the page number is
-              typed, and clamped to the last page whenever qwbe reports a total. */}
+              typed, committed on Enter or blur, and clamped to the last page
+              whenever qwbe reports a total. Enter followed by blur is one
+              request: after Enter the draft is gone, so the blur commits the
+              current page, which is a no-op. */}
           <label className="flex items-center gap-1 text-sm text-muted-foreground">
             Page
             <Input
@@ -441,12 +465,11 @@ export function CubeList({
               max={lastPage}
               className="w-20"
               aria-label="Page"
-              value={currentPage}
-              onChange={(e) => {
-                const wanted = Number(e.target.value)
-                if (!Number.isFinite(wanted) || wanted < 1) return
-                const clamped = lastPage === undefined ? wanted : Math.min(wanted, lastPage)
-                requery(() => setOffset((clamped - 1) * pageSize))
+              value={pageDraft ?? String(currentPage)}
+              onChange={(e) => setPageDraft(e.target.value)}
+              onBlur={commitPage}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitPage()
               }}
             />
             {lastPage !== undefined && <span>of {lastPage}</span>}

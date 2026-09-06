@@ -7,8 +7,11 @@ import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
 import {
+  CLIPBOARD_UNAVAILABLE,
   changedPayloadOf,
+  copyText,
   displayRowOf,
+  escapeCancels,
   fieldsInEditOf,
   initialValuesOf,
   updatePayloadOf,
@@ -216,5 +219,29 @@ describe("fieldsInEditOf (pencil scope)", () => {
     const { payload, missing } = changedPayloadOf(scoped, initial, { ...initial, cui: "RO2", name: "Changed" })
     assert.deepEqual(payload, { cui: "RO2" })
     assert.deepEqual(missing, [])
+  })
+})
+
+describe("escapeCancels (QWB-58)", () => {
+  it("Escape closes the draft only while no save is pending", () => {
+    assert.equal(escapeCancels("Escape", false), true)
+    assert.equal(escapeCancels("Escape", true), false)
+    assert.equal(escapeCancels("Enter", false), false)
+  })
+})
+
+describe("copyText (QWB-58)", () => {
+  it("reports a missing Clipboard API (insecure origin) in words, without throwing", async () => {
+    assert.equal(await copyText("x", undefined), CLIPBOARD_UNAVAILABLE)
+  })
+
+  it("returns null on success and the message on a refused write", async () => {
+    const written: string[] = []
+    assert.equal(await copyText("x", { writeText: async (t) => void written.push(t) }), null)
+    assert.deepEqual(written, ["x"])
+    assert.equal(
+      await copyText("x", { writeText: async () => Promise.reject(new Error("denied")) }),
+      "denied",
+    )
   })
 })
