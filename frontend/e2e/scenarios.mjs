@@ -1227,6 +1227,70 @@ export async function scenarioDetailEdit(api, seed) {
   )
 }
 
+// --- 12. sharing panel -------------------------------------------------------
+// As admin (owner of the seeded rows) on organization A: share with @reader
+// at the default TOTAL through the picker, the explicit Confirm share step,
+// chip present; the grant read back through the permissions API carries the
+// six actions; then revoke through the two-step chip button and read back
+// total 0. Runs while the admin session is live (before logout).
+export async function scenarioSharing(api, seed) {
+  const name = "sharing panel: share with @reader (TOTAL, confirmed), then revoke; both read back through the API"
+  const ref = `/permissions/entities/${encodeURIComponent("crm/organizations")}/Organization/${seed.orgA.id}`
+  const grants = async () => (await api.call(`${ref}/grants?offset=0&limit=50`)).body ?? {}
+  await open(`/organizations/${seed.orgA.id}`)
+  await settle(ORG_A)
+  if (!(await waitForText("Shared with", 15_000))) {
+    shot("12-sharing-RED", { full: true })
+    return record(name, "RED", "the sharing panel never rendered its grant list", "12-sharing-RED.png")
+  }
+  if (!(await clickStable((v) => v.role === "combobox" && v.name === "Username", "Username"))) {
+    shot("12-sharing-RED", { full: true })
+    return record(name, "RED", "no Username picker in the sharing panel", "12-sharing-RED.png")
+  }
+  type("reader")
+  if (!(await clickStable((v) => v.role === "button" && v.name === "Share", "Share"))) {
+    shot("12-sharing-RED", { full: true })
+    return record(name, "RED", "no Share button", "12-sharing-RED.png")
+  }
+  const transferWarned = await waitForText("Includes transfer", 10_000)
+  shot("12-confirm-share")
+  if (!(await clickStable((v) => v.role === "button" && v.name === "Confirm share", "Confirm share"))) {
+    shot("12-sharing-RED", { full: true })
+    return record(name, "RED", "no Confirm share step after Share", "12-sharing-RED.png")
+  }
+  const chip = await findStable((v) => v.role === "button" && v.name === "Revoke access for @reader")
+  await pause(1000)
+  const shared = await grants()
+  const row = (shared.rows ?? []).find((r) => r.subject?.kind === "user")
+  const sharedOk = chip !== null && shared.total === 1 && Array.isArray(row?.actions) && row.actions.length === 6
+  shot("12-shared")
+  if (!sharedOk) {
+    return record(name, "RED", `after Confirm share: chip=${chip !== null} transferWarned=${transferWarned} api total=${shared.total} actions=${JSON.stringify(row?.actions)}`, "12-shared.png")
+  }
+  if (!(await clickStable((v) => v.role === "button" && v.name === "Revoke access for @reader"))) {
+    return record(name, "RED", "the @reader chip lost its Revoke button", "12-shared.png")
+  }
+  await pause(500)
+  const disclaimer = snapshot().text.includes("may still give access")
+  if (!(await clickStable((v) => v.role === "button" && v.name === "Confirm revoke @reader"))) {
+    shot("12-sharing-RED", { full: true })
+    return record(name, "RED", "no Confirm revoke step after Revoke", "12-sharing-RED.png")
+  }
+  const none = await waitForText("Shared with: none", 15_000)
+  await pause(1000)
+  const after = await grants()
+  shot("12-revoked")
+  const pass = transferWarned && disclaimer && none && after.total === 0
+  return record(
+    name,
+    pass ? "PASS" : "RED",
+    pass
+      ? "TOTAL confirmation named transfer; grant read back with 6 actions; revoke disclaimer shown; API total 0 after revoke"
+      : `transferWarned=${transferWarned} disclaimer=${disclaimer} none=${none} api total after=${after.total}`,
+    "12-revoked.png",
+  )
+}
+
 /** Only the login scenario — used when the seed cannot get a session at all. */
 export async function scenarioLoginOnly() {
   await scenarioLogin()
@@ -1245,6 +1309,7 @@ export async function runAll(api, seed) {
   verdicts.push(await scenarioNonEditable(api))
   verdicts.push(await scenarioNavigation(seed))
   verdicts.push(await scenarioDetailEdit(api, seed))
+  verdicts.push(await scenarioSharing(api, seed))
   verdicts.push(await scenarioCreateOrganization(api))
   verdicts.push(await scenarioCustomField(api))
   verdicts.push(await scenarioCustomFieldTypes(api, seed))

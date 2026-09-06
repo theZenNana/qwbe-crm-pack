@@ -17,6 +17,7 @@ import { CubeList } from "@/components/cube-list"
 import { CubeKitShow } from "@/components/kit/cube-show"
 import { KitContext } from "@/components/kit/kit-context"
 import { SchemaApiPanel } from "@/components/schema-api-panel"
+import { SharingPanel } from "@/components/sharing-panel"
 import { type FieldGroupSpec, routeOf } from "@/lib/cube"
 
 const ORGANIZATION_GROUPS: FieldGroupSpec[] = [
@@ -48,6 +49,7 @@ async function Detail({ id }: { id: Promise<{ id: string }> }) {
       <KitContext>
         <CubeKitShow cube="crm/organizations" id={resolved} groups={ORGANIZATION_GROUPS} />
       </KitContext>
+      <SharingPanel cube="crm/organizations" entityType="Organization" id={resolved} />
       <section className="flex flex-col gap-2">
         <h2 className="text-lg font-semibold">Contacts</h2>
         <CubeList cube="crm/contacts" fixedFilters={{ organizationId: resolved }} />
