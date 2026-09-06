@@ -1,4 +1,4 @@
-// Typed sharing adapter for the CRM detail page (QWB-66).
+// Typed sharing adapter for the CRM detail page.
 //
 // Wraps the qwbe `permissions` cube's entity-sharing routes (verified against
 // qwbe core/src/cubes/permissions/api.ts and permissions-schemas.ts) so the

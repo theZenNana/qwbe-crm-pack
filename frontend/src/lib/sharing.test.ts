@@ -1,4 +1,4 @@
-// Unit tests for the sharing adapter (QWB-66).
+// Unit tests for the sharing adapter.
 //
 // Pure derivation plus injected-fetch calls only: no DOM, no backend, no live
 // server -- the same boundary the relation-batch suite tests across. The

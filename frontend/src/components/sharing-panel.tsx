@@ -16,7 +16,17 @@
 import { useCallback, useEffect, useId, useRef, useState, type RefObject } from "react"
 import { toast } from "sonner"
 
-import { Badge } from "shadcn-admin-kit"
+import {
+  Badge,
+  Command,
+  CommandEmpty,
+  CommandInput,
+  CommandItem,
+  CommandList,
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "shadcn-admin-kit"
 
 import { apiFetch } from "@/lib/cube"
 import {
@@ -41,7 +51,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Input } from "@/components/ui/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 
 const PAGE = 50
@@ -50,6 +60,8 @@ const SEARCH_PAUSE_MS = 300
 
 const CAPABILITY_NOTE =
   "Sharing opens this record only. Editing also needs the cube write capability, managed separately. A grantee cannot manage or re-share this record."
+const TOTAL_NOTE = "TOTAL includes transfer: this grantee can take ownership of the record."
+const DIRECTORY_NOTE = "Directory search unavailable: type the exact username."
 
 type Access = "loading" | "manage" | "denied" | "failed"
 
@@ -146,8 +158,10 @@ export function SharingPanel({
     try {
       const result = await revokeGrant(chip.grantId)
       if (!mounted.current) return
+      // A toast, not the banner: the refetch below clears the banner on a
+      // successful list load, which would erase the failure a moment later.
       if (!result.ok) {
-        setError(result.message)
+        toast.error(result.message)
       } else {
         toast.success(`Revoked access for ${chipTitle(chip)}`)
       }
@@ -159,7 +173,7 @@ export function SharingPanel({
     }
   }
 
-  if (access === "loading") return <Skeleton className="h-24 w-full" aria-label="Loading sharing" />
+  if (access === "loading") return <Skeleton role="status" className="h-24 w-full" aria-label="Loading sharing" />
   if (access === "denied")
     return (
       <Card>
@@ -272,7 +286,16 @@ function ChipRow({ chip, busy, onRevoke }: { chip: GrantChip; busy: boolean; onR
       }}
     >
       <span className="font-medium">{title}</span>
-      <Badge variant={chip.total ? "default" : "secondary"}>{chip.actions}</Badge>
+      {chip.total ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Badge tabIndex={0}>{chip.actions}</Badge>
+          </TooltipTrigger>
+          <TooltipContent>{TOTAL_NOTE}</TooltipContent>
+        </Tooltip>
+      ) : (
+        <Badge variant="secondary">{chip.actions}</Badge>
+      )}
       {confirming ? (
         <span role="group" aria-label={`Confirm revoke ${title}`} className="ml-auto flex flex-wrap items-center gap-1">
           <span className="text-xs text-muted-foreground">
@@ -355,19 +378,22 @@ function ShareForm({
     setFormError(null)
   }
 
-  // Client-side guards before the confirmation step; the server stays the
-  // truth (duplicates are not rejected there, so they are refused here).
+  // Client-side guards before the confirmation step. The server does not
+  // reject duplicates, and neither does this fully: `chips` is the loaded page
+  // only, and the user check compares the typed username against resolved
+  // names, so it is off for grants on other pages or whose name lookup was
+  // refused. A duplicate is additive and shows as its own revokable chip.
   const begin = () => {
     const name = username.trim()
     if (kind === "user") {
       if (name === "") return setFormError("choose a user")
       if (me && name === me.username) return setFormError("you already manage this record")
       if (chips.some((c) => c.kind === "user" && c.label === name))
-        return setFormError(`already shared directly with @${name}; revoke that grant first`)
+        return setFormError(`already shared directly with @${name} on this page`)
     } else {
       if (groupId === "") return setFormError("choose a group")
       if (chips.some((c) => c.kind === "group" && c.subjectId === groupId))
-        return setFormError(`already shared with group ${groups?.[groupId] ?? groupId}; revoke that grant first`)
+        return setFormError(`already shared with group ${groups?.[groupId] ?? groupId} on this page`)
     }
     if (actions.length === 0) return setFormError("choose at least one action")
     setFormError(null)
@@ -433,22 +459,24 @@ function ShareForm({
           }}
         />
       ) : (
-        <select
-          aria-label="Group"
-          className="h-9 w-64 rounded-md border bg-background px-2 text-sm"
+        <Select
           value={groupId}
-          onChange={(e) => {
-            setGroupId(e.target.value)
+          onValueChange={(v) => {
+            setGroupId(v)
             setConfirming(false)
           }}
         >
-          <option value="">choose a group</option>
-          {groupEntries.map(([gid, name]) => (
-            <option key={gid} value={gid}>
-              {name}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger className="w-64" aria-label="Group">
+            <SelectValue placeholder="choose a group" />
+          </SelectTrigger>
+          <SelectContent>
+            {groupEntries.map(([gid, name]) => (
+              <SelectItem key={gid} value={gid}>
+                {name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       )}
       <fieldset className="flex flex-wrap items-center gap-3 text-sm">
         <legend className="sr-only">Access level</legend>
@@ -526,9 +554,11 @@ function ShareForm({
   )
 }
 
-// The @username combobox: the typed text IS the identity sent to the backend
-// (username, never an id), so it keeps working when the directory search is
-// refused -- the picker then says so instead of showing "no matches".
+// The @username combobox on the kit's Command (cmdk): the typed text IS the
+// identity sent to the backend (username, never an id), so it keeps working
+// when the directory search is refused -- the picker then says so instead of
+// showing "no matches". cmdk owns the keyboard: arrows move the active option,
+// which carries aria-selected and aria-activedescendant; Enter picks it.
 function UserPicker({
   ref,
   value,
@@ -543,8 +573,6 @@ function UserPicker({
   const [open, setOpen] = useState(false)
   // undefined = nothing searched yet; null = directory refused.
   const [options, setOptions] = useState<AccountRef[] | null | undefined>(undefined)
-  const [active, setActive] = useState(-1)
-  const listboxId = useId()
   const rootRef = useRef<HTMLDivElement | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const seq = useRef(0)
@@ -576,90 +604,73 @@ function UserPicker({
     return () => document.removeEventListener("pointerdown", onDocPointerDown, true)
   }, [open])
 
-  const pick = (row: AccountRef) => {
-    onChange(row.username)
-    setOpen(false)
-    setActive(-1)
-  }
   const rows = options ?? []
+  const searched = options !== undefined && options !== null
+  // One persistent live region: a message that appears together with its
+  // container is not announced, so the visible texts below are echoes of this.
+  const status = !open ? "" : options === null ? DIRECTORY_NOTE : searched && rows.length === 0 ? "no matches" : ""
 
   return (
-    <div className="relative w-64" ref={rootRef}>
-      <Input
+    <Command
+      ref={rootRef}
+      shouldFilter={false}
+      className="relative w-64 overflow-visible rounded-md border bg-transparent **:data-[slot=command-input-wrapper]:border-b-0"
+      onKeyDown={(e) => {
+        if (e.key === "ArrowDown") setOpen(true)
+        if (e.key === "Escape" && open) {
+          e.stopPropagation()
+          setOpen(false)
+        }
+      }}
+    >
+      <CommandInput
         ref={ref}
-        role="combobox"
         aria-label="Username"
-        aria-expanded={open}
-        aria-controls={open ? listboxId : undefined}
-        aria-autocomplete="list"
-        aria-activedescendant={open && active >= 0 ? `${listboxId}-${active}` : undefined}
         placeholder="@username"
         value={value}
-        onChange={(e) => {
-          onChange(e.target.value)
+        onValueChange={(v) => {
+          onChange(v)
           setOpen(true)
-          setActive(-1)
           if (timer.current) clearTimeout(timer.current)
-          timer.current = setTimeout(() => runSearch(e.target.value), SEARCH_PAUSE_MS)
+          timer.current = setTimeout(() => runSearch(v), SEARCH_PAUSE_MS)
         }}
         onFocus={() => {
           setOpen(true)
           runSearch(value)
         }}
-        onKeyDown={(e) => {
-          if (e.key === "ArrowDown") {
-            e.preventDefault()
-            setOpen(true)
-            setActive((a) => Math.min(a + 1, rows.length - 1))
-          } else if (e.key === "ArrowUp") {
-            e.preventDefault()
-            setActive((a) => Math.max(a - 1, -1))
-          } else if (e.key === "Enter" && open && active >= 0 && rows[active]) {
-            e.preventDefault()
-            pick(rows[active])
-          } else if (e.key === "Escape" && open) {
-            e.stopPropagation()
-            setOpen(false)
-            setActive(-1)
-          }
-        }}
       />
+      <p role="status" className="sr-only">
+        {status}
+      </p>
       {open && options === null && (
-        <p className="mt-1 text-xs text-muted-foreground">
-          Directory search unavailable: type the exact username.
+        <p aria-hidden className="mt-1 text-xs text-muted-foreground">
+          {DIRECTORY_NOTE}
         </p>
       )}
-      {open && options !== null && options !== undefined && options.length === 0 && (
-        <p className="absolute z-50 mt-1 w-full rounded-md border bg-popover px-2 py-1.5 text-sm text-popover-foreground shadow-md">
-          no matches
-        </p>
-      )}
-      {open && rows.length > 0 && (
-        <ul
-          id={listboxId}
-          role="listbox"
+      {open && searched && (
+        <CommandList
           aria-label="Search users"
-          className="absolute z-50 mt-1 max-h-60 w-full overflow-auto rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
+          className="absolute top-full z-50 mt-1 w-full rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
         >
-          {rows.map((row, i) => (
-            <li
+          <CommandEmpty aria-hidden className="px-2 py-1.5 text-left">
+            no matches
+          </CommandEmpty>
+          {rows.map((row) => (
+            <CommandItem
               key={row.id}
-              id={`${listboxId}-${i}`}
-              role="option"
-              aria-selected={row.username === value}
-              className="cursor-pointer rounded px-2 py-1.5 text-sm hover:bg-accent data-[active=true]:bg-accent"
-              data-active={i === active}
-              onMouseDown={(e) => e.preventDefault()}
-              onMouseEnter={() => setActive(i)}
-              onClick={() => pick(row)}
+              value={row.username}
+              onSelect={() => {
+                onChange(row.username)
+                setOpen(false)
+              }}
             >
               {/* username + displayName only; email never renders (G8). */}
               @{row.username}
               {row.displayName ? ` (${row.displayName})` : ""}
-            </li>
+            </CommandItem>
           ))}
-        </ul>
+        </CommandList>
       )}
-    </div>
+    </Command>
   )
 }
