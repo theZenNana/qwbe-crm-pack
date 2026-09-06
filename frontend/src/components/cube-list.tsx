@@ -40,6 +40,8 @@ import {
 } from "@/lib/cube"
 import { relationRefsOf } from "@/lib/relation-batch"
 import { readPrefs } from "@/lib/field-prefs"
+import { PAGE_SIZES, type AppliedView, type SavedViewRow } from "@/lib/views"
+import { ListViews } from "@/components/list-views"
 import { useRelationTitles } from "@/hooks/use-relation-titles"
 import { RelationCell, RelationLink } from "@/components/relation-cell"
 import { RelationTypeahead } from "@/components/relation-typeahead"
@@ -62,10 +64,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-
-// The page sizes the size picker offers; the first is the default. 200 is qwbe's
-// MAX_LIMIT, so nothing larger can be asked for.
-const PAGE_SIZES = [25, 50, 100, 200]
 
 type EditState = { id: string; field: string; value: string }
 
@@ -96,7 +94,7 @@ export function CubeList({
   const [page, setPage] = useState<PageOf<Row> | null>(null)
   const [listError, setListError] = useState<string | null>(null)
   const [offset, setOffset] = useState(0)
-  const [pageSize, setPageSize] = useState(PAGE_SIZES[0])
+  const [pageSize, setPageSize] = useState<number>(PAGE_SIZES[0])
   const [sortBy, setSortBy] = useState<string | undefined>(undefined)
   const [descending, setDescending] = useState(false)
   // The chosen values of the exact filter fields, keyed by field name; empty
@@ -112,6 +110,12 @@ export function CubeList({
   const [pageDraft, setPageDraft] = useState<string | null>(null)
   // Per-cell error messages from a failed PATCH, keyed "id:field".
   const [cellErrors, setCellErrors] = useState<Record<string, string>>({})
+  // The applied saved view, if any: its column list wins over the Settings
+  // hide-list while it is active (the more specific, explicitly chosen intent).
+  const [activeView, setActiveView] = useState<{ id: string; columns: string[] | null } | null>(null)
+  // Bumped on every apply so the debounced filter inputs remount with the
+  // view's values (their draft is local state).
+  const [applyEpoch, setApplyEpoch] = useState(0)
   // False until the client has hydrated: before that, a click on a rendered
   // button reaches DOM the handler is not attached to yet (the observed race:
   // a trusted click, handler prop attached, React still does not run it -- the
@@ -214,15 +218,15 @@ export function CubeList({
 
   // Columns are pure derivation from the metadata; they live above the early
   // returns because the relation batch below needs them.
-  const columns = useMemo(
-    () =>
-      meta
-        ? columnsFromFields(meta.fields).filter(
-            (c) => c.visible && !hiddenNames.includes(c.field.name),
-          )
-        : [],
-    [meta, hiddenNames],
-  )
+  const columns = useMemo(() => {
+    if (!meta) return []
+    const all = columnsFromFields(meta.fields)
+    if (activeView?.columns) {
+      const byName = new Map(all.map((c) => [c.field.name, c]))
+      return activeView.columns.flatMap((n) => byName.get(n) ?? [])
+    }
+    return all.filter((c) => c.visible && !hiddenNames.includes(c.field.name))
+  }, [meta, hiddenNames, activeView])
   // Every relation value on the current page, deduplicated. One ids batch per
   // distinct target cube resolves them all (useRelationTitles); the old list
   // fetched each cell's row separately -- 25 round-trips on a 25-row page.
@@ -239,6 +243,10 @@ export function CubeList({
   // on the detail page). When this app has a route for the cube, the title
   // cell links to the row's detail page; the other cells stay inline-editable.
   const titleFieldName = meta.fields.find((f) => f.required)?.name
+  // Saved views are offered on ordinary lists only; a derived list (pinned
+  // filters) gets none in phase one. The pinned-filter rule of applyView holds
+  // regardless, so enabling it later is a UI change, not a safety change.
+  const showViews = Object.keys(fixedFilters ?? {}).length === 0
   const total = page?.total
   const rowCount = page?.rows.length ?? 0
   const { currentPage, lastPage } = pageWindow(offset, pageSize, total)
@@ -260,6 +268,27 @@ export function CubeList({
       setDescending(next.descending)
       setOffset(0)
     })
+  }
+
+  // A view applies through the same requery seam as every other control, and
+  // always resets to the first page. null puts the list back to its defaults.
+  const applyView = (view: SavedViewRow | null, applied: AppliedView | null) => {
+    requery(() => {
+      const params = applied?.params ?? {}
+      const chosen: Record<string, string> = {}
+      for (const [k, v] of Object.entries(params.filters ?? {})) {
+        if (!(k in (fixedFilters ?? {}))) chosen[k] = v
+      }
+      setSearch(chosen)
+      setPrefix(params.q ?? "")
+      setSortBy(params.sortBy)
+      setDescending(params.descending ?? false)
+      setPageSize(applied?.pageSize ?? PAGE_SIZES[0])
+      setOffset(0)
+      setPageDraft(null)
+    })
+    setActiveView(view && applied ? { id: view.id, columns: applied.columns } : null)
+    setApplyEpoch((n) => n + 1)
   }
 
   const commitPage = () => {
@@ -313,10 +342,29 @@ export function CubeList({
           narrow screen, the Add action keeps the trailing edge (no separate
           row per control). A field the caller pins (fixedFilters) gets no
           control here -- it is already applied server-side. */}
-      {controls && (createHref || controls.search || controls.filters.length > 0) && (
+      {controls && (showViews || createHref || controls.search || controls.filters.length > 0) && (
       <div className="flex flex-wrap items-end gap-3">
+      {showViews && (
+        <ListViews
+          targetCube={cube}
+          meta={meta}
+          controls={controls}
+          fixedFilters={fixedFilters ?? {}}
+          state={{
+            columns: columns.map((c) => c.field.name),
+            filters: search,
+            q: prefix,
+            sortBy,
+            descending,
+            pageSize,
+          }}
+          activeId={activeView?.id ?? null}
+          onApply={applyView}
+        />
+      )}
       {controls.search && (
         <TextSearch
+          key={`q:${applyEpoch}`}
           label="Search"
           ariaLabel="Search (prefix match)"
           value={prefix}
@@ -329,7 +377,7 @@ export function CubeList({
       {controls.filters.map((f) =>
         f.relation ? (
           <RelationTypeahead
-            key={f.name}
+            key={`${f.name}:${applyEpoch}`}
             field={f}
             value={search[f.name] ?? ""}
             onChange={(v) => {
@@ -339,7 +387,7 @@ export function CubeList({
           />
         ) : (
           <TextSearch
-            key={f.name}
+            key={`${f.name}:${applyEpoch}`}
             label={f.label}
             value={search[f.name] ?? ""}
             onChange={(v) => {

@@ -51,15 +51,38 @@ const TOTAL_NOTE = "TOTAL includes transfer: this grantee can take ownership of 
 
 type Access = "loading" | "manage" | "denied" | "failed"
 
+const ALL_LEVELS: ReadonlyArray<ShareLevel> = ["total", "read", "custom"]
+const LEVEL_LABELS: Record<ShareLevel, string> = {
+  total: "Full access (TOTAL)",
+  read: "Read only",
+  custom: "Custom",
+}
+
+// The optional props narrow the form for entities where TOTAL is wrong (a
+// saved view: read by default, edit at most). Every default keeps the record
+// sharing semantics exactly as before.
+export type SharingOptions = {
+  levels?: ReadonlyArray<ShareLevel>
+  customActions?: ReadonlyArray<EntityAction>
+  defaultLevel?: ShareLevel
+  title?: string
+  note?: string
+}
+
 export function SharingPanel({
   cube,
   entityType,
   id,
+  levels = ALL_LEVELS,
+  customActions = CUSTOM_ACTIONS,
+  defaultLevel = "total",
+  title = "Sharing",
+  note = CAPABILITY_NOTE,
 }: {
   cube: string
   entityType: string
   id: string
-}) {
+} & SharingOptions) {
   const [access, setAccess] = useState<Access>("loading")
   const [page, setPage] = useState<GrantsPageView | null>(null)
   const [offset, setOffset] = useState(0)
@@ -164,7 +187,7 @@ export function SharingPanel({
     return (
       <Card>
         <CardHeader>
-          <CardTitle>Sharing</CardTitle>
+          <CardTitle>{title}</CardTitle>
         </CardHeader>
         <CardContent>
           <p className="text-sm text-muted-foreground">
@@ -177,7 +200,7 @@ export function SharingPanel({
     return (
       <Card>
         <CardHeader>
-          <CardTitle>Sharing</CardTitle>
+          <CardTitle>{title}</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-2">
           <p role="alert" className="text-sm text-destructive">
@@ -198,8 +221,8 @@ export function SharingPanel({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Sharing</CardTitle>
-        <CardDescription>You manage access to this record. {CAPABILITY_NOTE}</CardDescription>
+        <CardTitle>{title}</CardTitle>
+        <CardDescription>You manage access to this record. {note}</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         {error && (
@@ -244,6 +267,10 @@ export function SharingPanel({
           busy={busy}
           setBusy={setBusy}
           onShared={refetch}
+          levels={levels}
+          customActions={customActions}
+          defaultLevel={defaultLevel}
+          note={note}
         />
       </CardContent>
     </Card>
@@ -331,6 +358,10 @@ function ShareForm({
   busy,
   setBusy,
   onShared,
+  levels,
+  customActions,
+  defaultLevel,
+  note,
 }: {
   cube: string
   entityType: string
@@ -341,11 +372,11 @@ function ShareForm({
   busy: boolean
   setBusy: (b: boolean) => void
   onShared: () => void
-}) {
+} & Required<Omit<SharingOptions, "title">>) {
   const [kind, setKind] = useState<"user" | "group">("user")
   const [username, setUsername] = useState("")
   const [groupId, setGroupId] = useState("")
-  const [level, setLevel] = useState<ShareLevel>("total")
+  const [level, setLevel] = useState<ShareLevel>(defaultLevel)
   const [custom, setCustom] = useState<EntityAction[]>(["read"])
   const [confirming, setConfirming] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
@@ -359,7 +390,7 @@ function ShareForm({
   const switchKind = (next: "user" | "group") => {
     setKind(next)
     // Group grants have no backend default (G3): the form starts at read only.
-    setLevel(next === "group" ? "read" : "total")
+    setLevel(next === "group" ? "read" : defaultLevel)
     setConfirming(false)
     setFormError(null)
   }
@@ -466,13 +497,7 @@ function ShareForm({
       )}
       <fieldset className="flex flex-wrap items-center gap-3 text-sm">
         <legend className="sr-only">Access level</legend>
-        {(
-          [
-            ["total", "Full access (TOTAL)"],
-            ["read", "Read only"],
-            ["custom", "Custom"],
-          ] as const
-        ).map(([value, label]) => (
+        {levels.map((value) => (
           <label key={value} className="flex items-center gap-1">
             <input
               type="radio"
@@ -484,14 +509,14 @@ function ShareForm({
                 setConfirming(false)
               }}
             />
-            {label}
+            {LEVEL_LABELS[value]}
           </label>
         ))}
       </fieldset>
       {level === "custom" && (
         <fieldset className="flex flex-wrap items-center gap-3 text-sm">
           <legend className="sr-only">Custom actions</legend>
-          {CUSTOM_ACTIONS.map((a) => (
+          {customActions.map((a) => (
             <label key={a} className="flex items-center gap-1">
               <Checkbox
                 checked={custom.includes(a)}
@@ -521,7 +546,7 @@ function ShareForm({
               Includes transfer: the grantee can take ownership of this record away from the current owner.
             </p>
           )}
-          <p className="text-xs text-muted-foreground">{CAPABILITY_NOTE}</p>
+          <p className="text-xs text-muted-foreground">{note}</p>
           <div className="flex gap-2">
             <Button type="button" size="sm" disabled={busy} aria-label="Confirm share" onClick={confirm}>
               Confirm share
