@@ -13,6 +13,7 @@
 // own section.
 import Link from "next/link"
 
+import { ActivityFeed } from "@/components/activity-feed"
 import { CubeList } from "@/components/cube-list"
 import { CubeKitShow } from "@/components/kit/cube-show"
 import { KitContext } from "@/components/kit/kit-context"
@@ -50,6 +51,7 @@ async function Detail({ id }: { id: Promise<{ id: string }> }) {
         <CubeKitShow cube="crm/organizations" id={resolved} groups={ORGANIZATION_GROUPS} />
       </KitContext>
       <SharingPanel cube="crm/organizations" entityType="Organization" id={resolved} />
+      <ActivityFeed cube="crm/organizations" entityId={resolved} />
       <section className="flex flex-col gap-2">
         <h2 className="text-lg font-semibold">Contacts</h2>
         <CubeList cube="crm/contacts" fixedFilters={{ organizationId: resolved }} />

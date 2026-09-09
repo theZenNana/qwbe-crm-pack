@@ -5,6 +5,7 @@
 // organization shows as a link resolved through the relation metadata on
 // organizationId. A field this list does not name, or a custom field defined
 // at runtime, still shows in its own section.
+import { ActivityFeed } from "@/components/activity-feed"
 import { CubeKitShow } from "@/components/kit/cube-show"
 import { KitContext } from "@/components/kit/kit-context"
 import { SchemaApiPanel } from "@/components/schema-api-panel"
@@ -35,6 +36,7 @@ async function Detail({ id }: { id: Promise<{ id: string }> }) {
         <CubeKitShow cube="crm/contacts" id={resolved} groups={CONTACT_GROUPS} />
       </KitContext>
       <SharingPanel cube="crm/contacts" entityType="Contact" id={resolved} />
+      <ActivityFeed cube="crm/contacts" entityId={resolved} />
       <SchemaApiPanel cube="crm/contacts" id={resolved} />
     </div>
   )

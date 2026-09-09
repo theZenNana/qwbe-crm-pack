@@ -18,6 +18,7 @@ import { Separator } from "@/components/ui/separator"
 const ENTRIES = [
   { href: "/organizations", label: "Organizations" },
   { href: "/contacts", label: "Contacts" },
+  { href: "/echo", label: "Echo" },
   { href: "/settings", label: "Settings" },
 ] as const
 
