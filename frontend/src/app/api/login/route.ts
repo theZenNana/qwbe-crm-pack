@@ -11,7 +11,10 @@ export async function POST(request: Request) {
   // CSRF: a cross-site POST could plant an attacker-controlled session
   // cookie in the victim's browser, so only same-origin requests are served.
   const origin = request.headers.get("origin")
-  if (origin && origin !== new URL(request.url).origin) {
+  const url = new URL(request.url)
+  // Next.js may build request.url with its bind address instead of the LAN host.
+  const expectedOrigin = `${url.protocol}//${request.headers.get("host") ?? url.host}`
+  if (origin && origin !== expectedOrigin) {
     return Response.json({ error: "cross-origin request rejected" }, { status: 403 })
   }
   const apiBase = process.env.QWBE_API_URL
