@@ -30,8 +30,8 @@ const fail = (msg) => {
 
 const log = (m) => console.log(m)
 
-// No hardcoded home-directory path in code (QWB-68): ORCA_CLI must come from the environment.
-const ORCA_CLI = process.env.ORCA_CLI ?? ""
+// Single source of truth in lib.mjs (QWB-68): ORCA defaults to "orca" via PATH.
+const ORCA_CLI = ORCA
 const frontendDir = join(dirname(fileURLToPath(import.meta.url)), "..")
 
 // --- free ports (never 4500/4510) -------------------------------------------------

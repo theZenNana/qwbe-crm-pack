@@ -104,8 +104,9 @@ Results (screenshots plus `results.md`) land in
 `<crm-pack>/.local/e2e-results/<YYYY-MM-DD>/` (override with `QWBE_E2E_RESULTS`).
 
 What it needs: the Orca app running locally with its runtime ready (`orca status --json`
-must report `state: "ready"`) and its CLI shim set in the environment (`ORCA_CLI`), and
-the qwbe and crm-pack checkouts at their default paths (override with `QWBE_REPO` and
+must report `state: "ready"`), its CLI shim set in the environment (`ORCA_CLI`), and
+the qwbe and crm-pack checkouts at their default paths — the kernel at `../../qwbe`
+relative to this checkout, and crm-pack at this checkout (override with `QWBE_REPO` and
 `CRM_PACK`). It runs only on the Orca host.
 
 A refused login (no qwbe session) is not faked green: the login scenario is driven anyway

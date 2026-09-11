@@ -15,16 +15,16 @@ export const here = dirname(fileURLToPath(import.meta.url))
 export const frontendDir = join(here, "..")
 export const crmPackDir = join(frontendDir, "..")
 
-// No hardcoded home-directory path in code (QWB-68): the Orca CLI must come from the environment.
-export const ORCA = process.env.ORCA_CLI ?? ""
+// Portable default (QWB-68): "orca" resolves via PATH; override with ORCA_CLI.
+export const ORCA = process.env.ORCA_CLI ?? "orca"
 
 /** Ports are picked at run time and must never be 4500 or 4510 (owner's servers). */
 export const isForbiddenPort = (p) => p === 4500 || p === 4510
 
 export const CONFIG = {
-  // Portable defaults (QWB-68): the qwbe kernel repo is the sibling of the crm-pack
-  // checkout (crm-pack lives in <qwbe-repo>/plugins/), everything else under <repo>/.local.
-  qwbeRepo: process.env.QWBE_REPO ?? join(crmPackDir, "..", ".."),
+  // Portable defaults (QWB-68): the kernel checkout is the sibling qwbe/ of plugins/
+  // (package.json depends on it as file:../../qwbe/core), everything else under <repo>/.local.
+  qwbeRepo: process.env.QWBE_REPO ?? join(crmPackDir, "..", "..", "qwbe"),
   crmPack: process.env.CRM_PACK ?? crmPackDir,
   workDir: process.env.QWBE_E2E_WORK ?? "/tmp/qwbe-e2e",
   dataDir: process.env.QWBE_E2E_DATA ?? "/tmp/qwbe-e2e-data",

@@ -35,7 +35,7 @@
 
 import { createReadStream, readFileSync } from "node:fs"
 import { createInterface } from "node:readline"
-import { dirname, join } from "node:path"
+import { dirname, join, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 import pg from "pg"
 import { dbUrl } from "./db-url.mjs"
@@ -65,11 +65,12 @@ if (!file || !mappingPath || !Number.isInteger(maxRejects) || maxRejects < 0) {
   process.exit(2)
 }
 
-// No customer-derived file may ever land inside the repository:
-// the input must live under the export directory, outside git. Tests opt out explicitly.
+// No customer-derived file may ever land inside the repository: the input must live
+// under the export directory (.local/, git-ignored). Tests opt out explicitly.
 // Portable default (QWB-68): relative to this repository, not to a user's home.
-const EXPORT_DIR = process.env.QWB50_EXPORT_DIR ?? join(dirname(fileURLToPath(import.meta.url)), "..", ".local", "vtiger-export")
-if (process.env.QWB50_TEST_UNSAFE_INPUT !== "1" && !file.startsWith(EXPORT_DIR + "/")) {
+const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
+const EXPORT_DIR = process.env.QWB50_EXPORT_DIR ?? join(REPO_ROOT, ".local", "vtiger-export")
+if (process.env.QWB50_TEST_UNSAFE_INPUT !== "1" && !resolve(file).startsWith(EXPORT_DIR + sep)) {
   console.error(`refusing input outside ${EXPORT_DIR}: customer files never enter the repository`)
   process.exit(2)
 }
