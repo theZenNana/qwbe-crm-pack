@@ -28,3 +28,6 @@ vtiger-export/
 # agent session state and dated config backups (the git add -A incident, 2026-09-02)
 .pi/
 CLAUDE.md.bak-*
+
+# Portable local state (QWB-68): exports, e2e results, never committed.
+.local/

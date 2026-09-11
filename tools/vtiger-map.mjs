@@ -35,6 +35,8 @@
 
 import { createReadStream, readFileSync } from "node:fs"
 import { createInterface } from "node:readline"
+import { dirname, join } from "node:path"
+import { fileURLToPath } from "node:url"
 import pg from "pg"
 import { dbUrl } from "./db-url.mjs"
 import { ensureExternalIdIndex, indexName, schemaOf } from "./ensure-external-id-index.mjs"
@@ -65,7 +67,8 @@ if (!file || !mappingPath || !Number.isInteger(maxRejects) || maxRejects < 0) {
 
 // No customer-derived file may ever land inside the repository:
 // the input must live under the export directory, outside git. Tests opt out explicitly.
-const EXPORT_DIR = "/home/lucian/WebProjects/vtiger-export"
+// Portable default (QWB-68): relative to this repository, not to a user's home.
+const EXPORT_DIR = process.env.QWB50_EXPORT_DIR ?? join(dirname(fileURLToPath(import.meta.url)), "..", ".local", "vtiger-export")
 if (process.env.QWB50_TEST_UNSAFE_INPUT !== "1" && !file.startsWith(EXPORT_DIR + "/")) {
   console.error(`refusing input outside ${EXPORT_DIR}: customer files never enter the repository`)
   process.exit(2)
