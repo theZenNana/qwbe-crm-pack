@@ -17,7 +17,7 @@ import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { CONFIG, isForbiddenPort, record, writeResults } from "./lib.mjs"
+import { CONFIG, ORCA, isForbiddenPort, record, writeResults } from "./lib.mjs"
 import { makeClient, seedDown, seedUp } from "./seed.mjs"
 import { closeTabs, runAll } from "./scenarios.mjs"
 
