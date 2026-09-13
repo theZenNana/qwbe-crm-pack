@@ -25,6 +25,28 @@ function stubQwbeLogin() {
 }
 
 describe("POST /api/login", () => {
+  it("accepts the LAN origin when Next.js uses its bind address in the URL", async () => {
+    process.env.QWBE_API_URL = "http://qwbe.test"
+    stubQwbeLogin()
+    const res = await POST(new Request("http://0.0.0.0:4601/api/login", {
+      method: "POST",
+      headers: { origin: "http://192.168.1.154:4601", host: "192.168.1.154:4601" },
+      body: JSON.stringify({ username: "u", password: "p" }),
+    }))
+    assert.equal(res.status, 200)
+  })
+
+  for (const origin of ["http://evil.test", "http://192.168.1.154:4510", "https://192.168.1.154:4601", "http://0.0.0.0:4601"]) {
+    it(`rejects mismatched LAN origin ${origin}`, async () => {
+      const res = await POST(new Request("http://0.0.0.0:4601/api/login", {
+        method: "POST",
+        headers: { origin, host: "192.168.1.154:4601" },
+        body: "{}",
+      }))
+      assert.equal(res.status, 403)
+    })
+  }
+
   it("answers with a token-free body and puts the token in a per-instance Set-Cookie", async () => {
     // The cookie name carries the port of the host the browser asked for:
     // two stacks on localhost must not share one session cookie (QWB-54).
