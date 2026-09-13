@@ -10,7 +10,7 @@ contract (`qwbe-core/cube`, `defineCube`).
 No manual copy anywhere: the kernel installs a package FROM its repository directory. Against
 a running kernel with the settings cube mounted:
 
-    settings:install-from /home/lucian/Projects/Qwbe/plugins/crm-pack
+    settings:install-from <path-to>/plugins/crm-pack
 
 (or `POST /settings/packages/install-from` pointing at this directory). Staging runs the
 source contract the kernel enforces at boot and refuses a package that breaks it; the store

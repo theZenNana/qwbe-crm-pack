@@ -13,20 +13,24 @@ import { fileURLToPath } from "node:url"
 
 export const here = dirname(fileURLToPath(import.meta.url))
 export const frontendDir = join(here, "..")
+export const crmPackDir = join(frontendDir, "..")
 
-export const ORCA = process.env.ORCA_CLI ?? "/home/lucian/.config/orca/linux-orca-cli-shim/orca"
+// Portable default (QWB-68): "orca" resolves via PATH; override with ORCA_CLI.
+export const ORCA = process.env.ORCA_CLI ?? "orca"
 
 /** Ports are picked at run time and must never be 4500 or 4510 (owner's servers). */
 export const isForbiddenPort = (p) => p === 4500 || p === 4510
 
 export const CONFIG = {
-  qwbeRepo: process.env.QWBE_REPO ?? "/home/lucian/Projects/Qwbe/qwbe",
-  crmPack: process.env.CRM_PACK ?? "/home/lucian/Projects/Qwbe/plugins/crm-pack",
+  // Portable defaults (QWB-68): the kernel checkout is the sibling qwbe/ of plugins/
+  // (package.json depends on it as file:../../qwbe/core), everything else under <repo>/.local.
+  qwbeRepo: process.env.QWBE_REPO ?? join(crmPackDir, "..", "..", "qwbe"),
+  crmPack: process.env.CRM_PACK ?? crmPackDir,
   workDir: process.env.QWBE_E2E_WORK ?? "/tmp/qwbe-e2e",
   dataDir: process.env.QWBE_E2E_DATA ?? "/tmp/qwbe-e2e-data",
   resultsDir:
     process.env.QWBE_E2E_RESULTS ??
-    join("/home/lucian/Projects/wiki/aplicatii/qwbe/crm-pack/e2e", new Date().toISOString().slice(0, 10)),
+    join(crmPackDir, ".local", "e2e-results", new Date().toISOString().slice(0, 10)),
   username: "admin",
   password: "admin",
   qwbePort: Number(process.env.QWBE_E2E_QWBE_PORT ?? 0),
@@ -96,6 +100,7 @@ const sleepSync = (ms) => {
 
 /** One attempt: run the command and return its parsed envelope, or throw. */
 function orcaOnce(args) {
+  if (!ORCA) throw new Error("set ORCA_CLI in the environment (path to the orca CLI shim)")
   let out
   try {
     out = execFileSync(ORCA, [...args, "--json"], { encoding: "utf8", timeout: 60_000 })

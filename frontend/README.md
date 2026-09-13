@@ -101,12 +101,12 @@ npm run e2e     # end-to-end scenarios through the Orca browser (see below)
    non-zero if any scenario is not PASS.
 
 Results (screenshots plus `results.md`) land in
-`/home/lucian/Projects/wiki/aplicatii/qwbe/crm-pack/e2e/<YYYY-MM-DD>/`.
+`<crm-pack>/.local/e2e-results/<YYYY-MM-DD>/` (override with `QWBE_E2E_RESULTS`).
 
 What it needs: the Orca app running locally with its runtime ready (`orca status --json`
-must report `state: "ready"`), the `orca` CLI shim at
-`/home/lucian/.config/orca/linux-orca-cli-shim/orca` (override with `ORCA_CLI`), and the
-qwbe and crm-pack checkouts at their default paths (override with `QWBE_REPO` and
+must report `state: "ready"`), its CLI shim set in the environment (`ORCA_CLI`), and
+the qwbe and crm-pack checkouts at their default paths — the kernel at `../../qwbe`
+relative to this checkout, and crm-pack at this checkout (override with `QWBE_REPO` and
 `CRM_PACK`). It runs only on the Orca host.
 
 A refused login (no qwbe session) is not faked green: the login scenario is driven anyway

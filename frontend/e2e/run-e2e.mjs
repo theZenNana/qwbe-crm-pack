@@ -17,7 +17,7 @@ import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { CONFIG, isForbiddenPort, record, writeResults } from "./lib.mjs"
+import { CONFIG, ORCA, isForbiddenPort, record, writeResults } from "./lib.mjs"
 import { makeClient, seedDown, seedUp } from "./seed.mjs"
 import { closeTabs, runAll } from "./scenarios.mjs"
 
@@ -30,7 +30,8 @@ const fail = (msg) => {
 
 const log = (m) => console.log(m)
 
-const ORCA_CLI = process.env.ORCA_CLI ?? "/home/lucian/.config/orca/linux-orca-cli-shim/orca"
+// Single source of truth in lib.mjs (QWB-68): ORCA defaults to "orca" via PATH.
+const ORCA_CLI = ORCA
 const frontendDir = join(dirname(fileURLToPath(import.meta.url)), "..")
 
 // --- free ports (never 4500/4510) -------------------------------------------------
@@ -267,6 +268,7 @@ try {
 }
 
   // Orca runtime must be ready before any browser step.
+  if (!ORCA_CLI) fail("ORCA_CLI is not set in the environment: no orca CLI to drive the browser steps")
   const status = spawnSync(ORCA_CLI, ["status", "--json"], { encoding: "utf8", timeout: 30_000 })
   let ok = false
   try {

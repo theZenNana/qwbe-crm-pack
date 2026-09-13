@@ -12,17 +12,23 @@
 //
 // Two modes:
 //   default / --dry-run : prints the SQL, the column list and the row COUNT. No data leaves.
-//   --write             : streams the JSONL to /home/lucian/WebProjects/vtiger-export/
+//   --write             : streams the JSONL to <repo>/.local/vtiger-export/
+//                         (or QWB50_EXPORT_DIR when set)
 //                         and prints ONLY the output path and the row count.
 //
 // Usage: node tools/vtiger-export.mjs <accounts|contacts> [--write]
 
 import { createWriteStream, mkdirSync } from "node:fs"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
+import { fileURLToPath } from "node:url"
 import mysql from "mysql2/promise"
 import { buildQuery, cfColumnQuery, ENTITIES } from "./vtiger-export-query.mjs"
 
-const EXPORT_DIR = "/home/lucian/WebProjects/vtiger-export"
+// Portable default (QWB-68): relative to this repository, not to a user's home.
+// .local/ is git-ignored, so customer-derived files never enter git.
+const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
+// Single export-dir variable for both tools (QWB-68 review): QWB50_EXPORT_DIR.
+const EXPORT_DIR = process.env.QWB50_EXPORT_DIR ?? join(REPO_ROOT, ".local", "vtiger-export")
 
 const args = process.argv.slice(2)
 const write = args.includes("--write")
@@ -64,8 +70,8 @@ if (!write) {
   process.exit(0)
 }
 
-mkdirSync(EXPORT_DIR, { recursive: true })
-const outDir = process.env.QWB50_EXPORT_DIR ?? EXPORT_DIR // override used only by the fixture tests
+const outDir = EXPORT_DIR // override via QWB50_EXPORT_DIR, read above
+mkdirSync(outDir, { recursive: true })
 const outPath = join(outDir, `${entity}.jsonl`)
 const out = createWriteStream(outPath, { encoding: "utf8" })
 
