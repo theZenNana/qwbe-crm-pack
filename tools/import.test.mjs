@@ -16,6 +16,7 @@
 // <QWBE_REPO>/core to a temp dir, drops this plugin into its plugins/ directory and boots
 // that. The qwbe checkout itself is never written.
 
+import { randomBytes } from "node:crypto"
 import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -23,6 +24,7 @@ import { after, before, describe, it } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync, spawn } from "node:child_process"
 import pg from "pg"
+import { dropThrowawayDb } from "./drop-throwaway-db.mjs"
 
 import { buildQuery, cfColumnQuery, ENTITIES } from "./vtiger-export-query.mjs"
 import { externalKey, mapRow, rowKey } from "./vtiger-map-lib.mjs"
@@ -160,7 +162,10 @@ describe("import chain end-to-end (synthetic fixture, throwaway kernel)", { skip
     adminUrl.port = process.env.QWBE_PG_PORT ?? "5433"
     adminUrl.username = process.env.QWBE_PG_USER ?? "postgres"
     adminUrl.password = process.env.QWBE_PG_PASSWORD
-    const dbName = `qwbe_qwb50_${Date.now().toString(36)}`
+    // Random suffix, same recipe as the kernel's core/src/pg/test-db.ts (belt and braces against
+    // a same-millisecond start from another worktree; the QWB-72 flake itself was the
+    // pool.end()/DROP FORCE race, see dropThrowawayDb).
+    const dbName = `qwbe_qwb50_${randomBytes(4).toString("hex")}`
     const admin = new pg.Pool({ connectionString: adminUrl.toString(), max: 1 })
     await admin.query(`CREATE DATABASE "${dbName}"`)
     await admin.end()
@@ -208,10 +213,13 @@ describe("import chain end-to-end (synthetic fixture, throwaway kernel)", { skip
       } catch {}
     }
     if (!alive) throw new Error(`server did not start:\n${output}`)
-    stopServer = () => {
+    stopServer = async () => {
       proc.kill("SIGTERM")
+      // Awaited, not fire-and-forget: a DROP left dangling in a synchronous after() leaked one
+      // qwbe_qwb50_* database per run on the shared server (QWB-72 review).
       const a = new pg.Pool({ connectionString: adminUrl.toString(), max: 1 })
-      a.query(`DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE)`).catch(() => {}).finally(() => a.end())
+      await dropThrowawayDb(a, dbName).catch(() => {})
+      await a.end()
       rmSync(core, { recursive: true, force: true })
     }
 
@@ -227,8 +235,8 @@ describe("import chain end-to-end (synthetic fixture, throwaway kernel)", { skip
     const names = (cubes ?? []).map((c) => c.name)
     if (!names.includes("crm/organizations") || !names.includes("crm/contacts")) throw new Error(`crm cubes not mounted: ${names.join(", ")}`)
   })
-  after(() => {
-    if (stopServer) stopServer()
+  after(async () => {
+    if (stopServer) await stopServer()
   })
 
   const work = mkdtempSync(join(tmpdir(), "qwb50-")) // eslint-disable-line

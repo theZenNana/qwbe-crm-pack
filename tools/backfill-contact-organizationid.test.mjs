@@ -12,23 +12,29 @@
 // Requires a reachable Postgres (QWBE_PG_HOST/PORT/USER/PASSWORD, port 5433 by default).
 
 import assert from "node:assert/strict"
+import { randomBytes } from "node:crypto"
 import { after, before, describe, it } from "node:test"
 import pg from "pg"
 import { backfillMissingKey, renameOrganizationKeys } from "./backfill-contact-organizationid.mjs"
 import { requireDbUrl } from "./db-url.mjs"
+import { dropThrowawayDb } from "./drop-throwaway-db.mjs"
 
 const SCHEMA = "backfill_test"
 const TABLE = "rows"
 
 const admin = new pg.Pool({ connectionString: requireDbUrl().toString(), max: 1 })
 let pool
-const dbName = `qwbe_backfill_${Date.now().toString(36)}`
+// Random suffix, same recipe as the kernel's core/src/pg/test-db.ts (belt and braces against a
+// same-millisecond start from another worktree). The flake itself was the pool.end()/DROP FORCE
+// race on our own backend -- see dropThrowawayDb.
+const dbName = `qwbe_backfill_${randomBytes(4).toString("hex")}`
 
 before(async () => {
   await admin.query(`CREATE DATABASE "${dbName}"`)
   const dbUrl = requireDbUrl()
   dbUrl.pathname = `/${dbName}`
   pool = new pg.Pool({ connectionString: dbUrl.toString(), max: 1 })
+  pool.on("error", () => {}) // a late FATAL from the server must never crash the file
   await pool.query(`CREATE SCHEMA "${SCHEMA}"`)
   // The rows table, as the kernel's pg store creates it (core/src/pg/setup.ts).
   await pool.query(
@@ -54,7 +60,7 @@ before(async () => {
 
 after(async () => {
   await pool?.end()
-  await admin.query(`DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE)`).catch(() => {})
+  await dropThrowawayDb(admin, dbName).catch(() => {})
   await admin.end()
 })
 
