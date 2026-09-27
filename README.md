@@ -17,7 +17,7 @@ source contract the kernel enforces at boot and refuses a package that breaks it
 copy records where it came from and when (`qwbe-source.json`). Freshness is provable, not
 assumed - both checks exit 1 on drift:
 
-    node probes/source-drift.mjs              # this pack: store shelf and installed copy
+    node tools/check/source-drift.ts          # this pack: store shelf and installed copy
     node ../../qwbe/core/bin/qwbe.mjs drift   # every shelf in the kernel's store
 
 `start-crm-local.sh` is gone (QWB-54, ticket 22): it installed the pack by hand-copying into
@@ -62,7 +62,7 @@ manifest once invented a migration from a cube called "organizations" that never
 satisfy a hierarchy gate; the invented source is gone, the honest one is declared, and the
 kernel side that refuses an unattributable source is ticket 08.) Rows migrated from the old
 cube still carry the pre-rename field names `accountNo`/`accountType` in their body; the
-one-shot backfill (`tools/backfill-contact-organizationid.mjs`) renames those keys once, in
+one-shot backfill (`tools/db/backfill-contact-organizationid.ts`) renames those keys once, in
 the data. Operator note: `migrateDataSchemas` refuses when the destination schema already
 exists — a system that already booted with the new cube name must drop the empty
 `crm--organizations` schema first.
@@ -114,7 +114,7 @@ One direction only: a contract **holds** a party id. Nothing resolves it inside 
 If `contacts` is absent or switched off, `contracts` starts and serves anyway, with ids that
 resolve to nothing — and vice versa. Showing a contract next to its contact is declared one
 level up, in a space, by a third party, so neither cube ever learns the other exists. The
-runtime probes (`probes/crm.mjs`) boot the kernel with each cube alone to prove the
+live checks (`checks/live/crm-one-cube.test.ts`) boot the kernel with each cube alone to prove the
 independence, and exercise the party id as data (set, nullable, opaque).
 
 ## Money
@@ -133,8 +133,8 @@ from the source system is ever read, and nothing generated is committed: the see
 the only artifact, the data lives in the local database.
 
 ```sh
-node tools/seed-demo.mjs            # create what is missing (defs first, then rows)
-node tools/seed-demo.mjs --wipe     # wipe demo rows + demo defs, then rebuild
+node tools/demo/seed-demo.ts        # create what is missing (defs first, then rows)
+node tools/demo/seed-demo.ts --wipe # wipe demo rows + demo defs, then rebuild
 ```
 
 The same seed always produces the same rows (deterministic, index-derived — no faker), and a
@@ -154,7 +154,7 @@ mapping, no import writes it), so it declares no external identity. The rules:
 - **Uniqueness lives in the DATABASE, not in the application.** Each importable table holds a
   partial unique index on `body->>'externalId'` (live rows, non-null values only — a row
   created by hand has no source system, and a soft-deleted row does not block its identity
-  from being imported again). The index is ensured by `tools/ensure-external-id-index.mjs`,
+  from being imported again). The index is ensured by `tools/db/ensure-external-id-index.ts`,
   which the import tool runs before its first write; it can also be run standalone for both
   cubes. A plugin cube cannot create the index itself: the kernel's per-cube role holds DML
   only, and Postgres refuses `CREATE INDEX` to anyone but the table's owner.
@@ -171,7 +171,7 @@ mapping, no import writes it), so it declares no external identity. The rules:
 The map tool needs a database connection (`QWBE_DATABASE_URL`, or `QWBE_PG_PASSWORD` plus
 optional `QWBE_PG_HOST/PORT/USER`) alongside the API credentials, because of the index. Rows
 stored before this ticket lack the `externalId` KEY; the one-shot backfill
-(`tools/backfill-contact-organizationid.mjs`) fills it with null on both cubes, the same way
+(`tools/db/backfill-contact-organizationid.ts`) fills it with null on both cubes, the same way
 it fills `organizationId` on contacts, and renames the pre-ticket-12 field keys inside
 organizations (`accountNo` → `organizationNo`, `accountType` → `organizationType`).
 
@@ -196,23 +196,26 @@ cubes/crm/organizations/schema.ts  Organization: the domain schemas (split for t
 cubes/crm/contacts/index.ts        Contact: table, API, schemas, permissions, commands
 cubes/crm/contracts/index.ts       Contract: table, API, schemas, permissions, commands
 cubes/crm/*/index.test.ts          source-local contract tests
-probes/crm.mjs                     runtime proof against a live kernel (scratch QWBE_DATA_DIR)
-probes/source-drift.mjs            copy freshness: store shelf + installed copy vs this repo
+checks/unit/, checks/integration/  vitest checks without a server (source contract, vtiger)
+checks/live/                       runtime proof against a live kernel (scratch QWBE_DATA_DIR)
+probes/crm.mjs                     the kernel's probe entry: runs checks/live/
+tools/check/                       `npm run check` gates; source-drift.ts = copy freshness
 ```
 
 The cubes do not import each other. All use only exported `qwbe-core/*` package subpaths.
 
 ## Running the tests
 
-Unit tests and typechecking run from this source directory. Runtime probes use a Qwbe checkout
+Unit tests and typechecking run from this source directory. Live checks use a Qwbe checkout
 and scratch data:
 
 ```sh
 npm install --ignore-scripts
-npm test
-npm run typecheck
+npm run check                  # typecheck, lint, test, secrets
+npm run check -- --live        # plus checks/live (starts its own servers on scratch data)
+npm run check -- --drift       # plus tools/check/source-drift.ts
 
-# runtime probe (starts its own server on a scratch data dir)
+# live checks alone, as the kernel runs them
 QWBE_REPO=<qwbe> node probes/crm.mjs
 ```
 
