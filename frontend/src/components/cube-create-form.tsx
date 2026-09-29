@@ -40,6 +40,7 @@ import {
   type CubeMetadata,
   type FieldMetadata,
   type Row,
+  requestFailure,
 } from "@/lib/cube"
 import { readPrefs } from "@/lib/field-prefs"
 import { RelationTypeahead } from "@/components/relation-typeahead"
@@ -84,7 +85,7 @@ export function CubeCreateForm({
     let alive = true
     apiFetch(metadataApiPath(cube))
       .then(async (r) => {
-        if (!r.ok) throw new Error(`metadata request failed: ${r.status}`)
+        if (!r.ok) throw await requestFailure("metadata", r)
         return (await r.json()) as CubeMetadata
       })
       .then((m) => {

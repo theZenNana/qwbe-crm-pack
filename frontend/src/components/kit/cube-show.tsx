@@ -49,6 +49,7 @@ import {
   type FieldMetadata,
   type FieldSection,
   type Row,
+  requestFailure,
 } from "@/lib/cube.ts"
 import {
   changedPayloadOf,
@@ -87,7 +88,7 @@ export function CubeKitShow({
     let alive = true
     apiFetch(metadataApiPath(cube))
       .then(async (r) => {
-        if (!r.ok) throw new Error(`metadata request failed: ${r.status}`)
+        if (!r.ok) throw await requestFailure("metadata", r)
         return (await r.json()) as CubeMetadata
       })
       .then((m) => {
