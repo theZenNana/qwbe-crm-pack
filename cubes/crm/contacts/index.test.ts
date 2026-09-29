@@ -145,4 +145,30 @@ describe("contacts cube contract", () => {
     const failure = Cause.failureOption(exit.cause)
     assert.ok(failure._tag === "Some" && failure.value._tag === "Forbidden")
   })
+
+  it("relational search filters by the allowed ids in the store and skips it for none (Qwbe#73)", async () => {
+    const calls: unknown[] = []
+    const tools = {
+      store: {
+        page: (_table: string, _page: unknown, where: unknown) => {
+          calls.push(where)
+          return Effect.succeed({ rows: [], total: 0 })
+        },
+      },
+      bus: { publish: () => Effect.void },
+    } as unknown as CubeTools
+    const search = cube.create(tools).relational?.search
+    assert.ok(search)
+    const run = (only?: "all" | ReadonlySet<string>) =>
+      Effect.runPromise(search("email", "x", { offset: 0, limit: 10 }, only).pipe(Effect.provideService(CurrentUser, admin)))
+
+    await run(new Set(["cont_a", "cont_b"]))
+    assert.deepEqual(calls, [{ equals: [{ field: "email", value: "x" }], ids: ["cont_a", "cont_b"] }])
+
+    assert.deepEqual(await run(new Set()), { rows: [], total: 0 })
+    assert.equal(calls.length, 1)
+
+    await run()
+    assert.deepEqual(calls[1], { equals: [{ field: "email", value: "x" }] })
+  })
 })
