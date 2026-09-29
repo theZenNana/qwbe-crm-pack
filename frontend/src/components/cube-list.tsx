@@ -37,6 +37,7 @@ import {
   saveCell,
   sortRequestFor,
   withSavedValue,
+  requestFailure,
 } from "@/lib/cube"
 import { relationRefsOf } from "@/lib/relation-batch"
 import { readPrefs } from "@/lib/field-prefs"
@@ -134,7 +135,7 @@ export function CubeList({
     let alive = true
     apiFetch(metadataApiPath(cube))
       .then(async (r) => {
-        if (!r.ok) throw new Error(`metadata request failed: ${r.status}`)
+        if (!r.ok) throw await requestFailure("metadata", r)
         return (await r.json()) as CubeMetadata
       })
       .then((m) => {
@@ -183,7 +184,7 @@ export function CubeList({
       }),
     )
       .then(async (r) => {
-        if (!r.ok) throw new Error(`list request failed: ${r.status}`)
+        if (!r.ok) throw await requestFailure("list", r)
         return (await r.json()) as PageOf<Row>
       })
       .then((p) => {

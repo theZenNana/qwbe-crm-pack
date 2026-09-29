@@ -170,9 +170,14 @@ export const cube = defineCube(group, {
     },
 
     relational: {
-      search: (field, value, page) =>
+      search: (field, value, page, only = "all") =>
         Effect.gen(function* () {
-          const p = yield* store.page<OrganizationRow>(TABLE, page, { field, value })
+          // Empty `ids` means "no filter" to the store.
+          if (only !== "all" && only.size === 0) return { rows: [], total: 0 }
+          const p = yield* store.page<OrganizationRow>(TABLE, page, {
+            equals: [{ field, value }],
+            ...(only === "all" ? {} : { ids: [...only] }),
+          })
           return { rows: p.rows.map(summary), total: p.total }
         }),
 

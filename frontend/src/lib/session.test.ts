@@ -149,6 +149,27 @@ describe("proxyToQwbe", () => {
     assert.equal(result.clearCookie, true)
   })
 
+  it("answers 502 with a JSON message when qwbe cannot be reached", async () => {
+    const fetchImpl = (async () => {
+      throw new TypeError("fetch failed", { cause: { code: "ECONNREFUSED" } })
+    }) as typeof fetch
+    const result = await proxyToQwbe(
+      "http://qwbe.test", "crm/organizations/metadata", "GET", null, "tok-1", null, fetchImpl,
+    )
+    assert.equal(result.status, 502)
+    assert.equal(result.contentType, "application/json")
+    assert.deepEqual(JSON.parse(result.body), { message: "qwbe API unreachable at http://qwbe.test" })
+  })
+
+  it("passes an HTTP 500 from qwbe through unchanged", async () => {
+    const fetchImpl = (async () =>
+      new Response("boom", { status: 500, headers: { "content-type": "text/plain" } })) as typeof fetch
+    const result = await proxyToQwbe(
+      "http://qwbe.test", "auth/me", "GET", null, "tok-1", null, fetchImpl,
+    )
+    assert.deepEqual(result, { status: 500, contentType: "text/plain", body: "boom" })
+  })
+
   it("forwards the caller's content-type on a request with a body", async () => {
     let seen: { headers: Record<string, string>; body: string } | null = null
     const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {

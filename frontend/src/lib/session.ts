@@ -152,12 +152,24 @@ export async function proxyToQwbe(
   // and with no content-type at all.
   const hasBody = body !== null && body !== ""
   if (hasBody) headers["content-type"] = contentType ?? "application/json"
-  const res = await fetchImpl(`${apiBase}/${path}`, {
-    method,
-    headers,
-    body: hasBody ? body : undefined,
-  })
-  const resBody = await res.text()
+  // fetch rejects only when no HTTP response arrives (refused, DNS, reset);
+  // an HTTP error status resolves and is passed through below.
+  let res: Response
+  let resBody: string
+  try {
+    res = await fetchImpl(`${apiBase}/${path}`, {
+      method,
+      headers,
+      body: hasBody ? body : undefined,
+    })
+    resBody = await res.text()
+  } catch {
+    return {
+      status: 502,
+      contentType: "application/json",
+      body: JSON.stringify({ message: `qwbe API unreachable at ${apiBase}` }),
+    }
+  }
   if (res.status === 401) {
     return {
       status: 401,

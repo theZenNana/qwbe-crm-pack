@@ -19,6 +19,7 @@ import {
   cubeApiPath,
   errorMessage,
   errorBody,
+  requestFailure,
   groupFields,
   hrefForRelation,
   rowHref,
@@ -400,6 +401,24 @@ describe("qwbe error messages", () => {
     const parsed = await errorBody(new Response("gateway exploded", { status: 502 }))
     assert.equal(parsed, "gateway exploded")
     assert.equal(errorMessage(parsed, "name"), "gateway exploded")
+  })
+})
+
+describe("requestFailure", () => {
+  it("surfaces the message of a JSON error body", async () => {
+    const response = new Response(
+      JSON.stringify({ message: "qwbe API unreachable at http://qwbe.test" }),
+      { status: 502, headers: { "content-type": "application/json" } },
+    )
+    const error = await requestFailure("metadata", response)
+    assert.equal(error.message, "qwbe API unreachable at http://qwbe.test")
+  })
+
+  it("falls back to the status when the body carries no message", async () => {
+    const error = await requestFailure("metadata", new Response("", { status: 500 }))
+    assert.equal(error.message, "metadata request failed: 500")
+    const noMessage = await requestFailure("list", new Response("{}", { status: 503 }))
+    assert.equal(noMessage.message, "list request failed: 503")
   })
 })
 

@@ -346,6 +346,19 @@ export async function errorBody(response: Response): Promise<unknown> {
   }
 }
 
+// The error for a failed load: the body's message when there is one (for
+// example "qwbe API unreachable at ..." from the proxy), else the status.
+export async function requestFailure(what: string, response: Response): Promise<Error> {
+  const body = await errorBody(response)
+  const message =
+    typeof body === "string" ? body : (body as { message?: unknown } | undefined)?.message
+  return new Error(
+    typeof message === "string" && message.length > 0
+      ? message
+      : `${what} request failed: ${response.status}`,
+  )
+}
+
 // The frontend routes this app actually has. A relation whose target has no
 // route renders as plain text instead of a dead link.
 const RELATION_ROUTES: Record<string, string> = {
