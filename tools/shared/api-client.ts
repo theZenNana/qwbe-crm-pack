@@ -5,6 +5,7 @@ import * as HttpClient from "@effect/platform/HttpClient"
 import * as HttpClientRequest from "@effect/platform/HttpClientRequest"
 import type * as HttpClientResponse from "@effect/platform/HttpClientResponse"
 import * as Data from "effect/Data"
+import type * as Duration from "effect/Duration"
 import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
 
@@ -21,6 +22,8 @@ export interface CallOptions {
   readonly token?: string
   readonly body?: unknown
   readonly headers?: Readonly<Record<string, string>>
+  /** How long the whole request may take; 10 seconds when left out. */
+  readonly timeout?: Duration.DurationInput
 }
 
 /** A logged-in kernel: its base URL and the session token. */
@@ -58,7 +61,7 @@ const where = (path: string, options: CallOptions) => `${options.method ?? "GET"
 export const call = (base: string, path: string, options: CallOptions = {}) =>
   HttpClient.execute(request(`${base}${path}`, options)).pipe(
     Effect.flatMap(reply),
-    Effect.timeout("10 seconds"),
+    Effect.timeout(options.timeout ?? "10 seconds"),
     Effect.mapError((error) => new ApiFailed({ message: `${where(path, options)}: ${error.message}` })),
   )
 
