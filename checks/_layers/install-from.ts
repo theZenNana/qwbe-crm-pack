@@ -54,4 +54,6 @@ export const exists = (...segments: ReadonlyArray<string>) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) => fs.exists(join(...segments)))
 
 /** POST /settings/packages/install-from with this repo. */
-export const installFrom = (admin: Session) => admin.send("POST", "/settings/packages/install-from", { path: PACK })
+export const installFrom = (admin: Session) =>
+  // The install runs a tsc contract gate over the pack (8.6 s measured), too close to the 10 s default.
+  admin.send("POST", "/settings/packages/install-from", { path: PACK }, { timeout: "60 seconds" })

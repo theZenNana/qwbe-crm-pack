@@ -11,7 +11,7 @@ export interface Session {
   readonly base: string
   readonly token: string
   readonly get: (path: string) => Reply
-  readonly send: (method: Method, path: string, body?: unknown) => Reply
+  readonly send: (method: Method, path: string, body?: unknown, options?: Pick<CallOptions, "timeout">) => Reply
   readonly status: (path: string) => Effect.Effect<number, never, Effect.Effect.Context<Reply>>
   readonly switchCube: (cube: string, enabled: boolean) => Reply
 }
@@ -21,7 +21,7 @@ export const session = (base: string, token: string): Session => ({
   base,
   token,
   get: (path) => call(base, path, { token }),
-  send: (method, path, body) => call(base, path, { method, token, body }),
+  send: (method, path, body, options) => call(base, path, { ...options, method, token, body }),
   status: (path) => Effect.map(call(base, path, { token }), (reply) => reply.status),
   switchCube: (cube, enabled) =>
     call(base, `/settings/cubes/${encodeURIComponent(cube)}`, { method: "POST", token, body: { enabled } }),
