@@ -1,19 +1,19 @@
-// The organization create form. The field list is the F1 basic set, in display
-// order; labels, required flags and validation come from the cube metadata,
-// so nothing here duplicates the schema.
-import { CubeCreateForm } from "@/components/cube-create-form"
+// Creating an organization (spec §4.5): the shared organization form, empty or
+// started from an existing organization (?duplicate=<id>, the detail's
+// Duplicate). It lives in the ra-core context the kit inputs need.
+import { KitContext } from "@/components/kit/kit-context"
+import { NewOrganization } from "@/components/organizations/new-organization"
+import { PageMain } from "@/components/page-main"
 
-export default function NewOrganizationPage() {
+export default async function NewOrganizationPage({ searchParams }: PageProps<"/organizations/new">) {
+  const { duplicate } = await searchParams
+  const duplicateOf = typeof duplicate === "string" && duplicate !== "" ? duplicate : null
   return (
-    <main className="mx-auto flex w-full max-w-7xl flex-col gap-4 p-4">
-      <h1 className="text-xl font-semibold">New organization</h1>
-      {/* externalId stays off the form: it is
-          the import tool's identity, and its unique index turns a hand-typed
-          duplicate into a 500, not a form refusal. */}
-      <CubeCreateForm
-        cube="crm/organizations"
-        fields={["name", "industry", "phone", "email", "website"]}
-      />
-    </main>
+    <PageMain>
+      <h1 className="text-xl font-semibold">{duplicateOf ? "Duplicate organization" : "New organization"}</h1>
+      <KitContext>
+        <NewOrganization duplicateOf={duplicateOf} />
+      </KitContext>
+    </PageMain>
   )
 }

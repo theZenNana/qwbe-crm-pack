@@ -1,17 +1,19 @@
-// The organizations list. Nothing entity-specific here but the cube name:
-// columns, sorting, search and paging all come from the cube metadata.
-import { CubeList } from "@/components/cube-list"
+// The Organizations list (T-1813): vtiger 5.4's ListView in the app's style,
+// built in components/organizations/organization-list.tsx. The list keeps its
+// query in the URL (useSearchParams), hence Suspense.
+import { Suspense } from "react"
+
+import { OrganizationList } from "@/components/organizations/organization-list"
+import { Skeleton } from "@/components/ui/skeleton"
+import { PageMain } from "@/components/page-main"
 
 export default function OrganizationsPage() {
   return (
-    <main className="mx-auto flex w-full max-w-7xl flex-col gap-4 p-4">
+    <PageMain>
       <h1 className="text-xl font-semibold">Organizations</h1>
-      <CubeList
-        cube="crm/organizations"
-        createHref="/organizations/new"
-        addLabel="Add organization"
-        emptyMessage="No organizations yet."
-      />
-    </main>
+      <Suspense fallback={<Skeleton className="h-64 w-full" />}>
+        <OrganizationList />
+      </Suspense>
+    </PageMain>
   )
 }

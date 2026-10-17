@@ -42,6 +42,8 @@ import {
   type Row,
   requestFailure,
 } from "@/lib/cube"
+import { withMockFields } from "@/mock/organizations"
+import { withOrganizationDisplay } from "@/lib/organization-display"
 import { readPrefs } from "@/lib/field-prefs"
 import { RelationTypeahead } from "@/components/relation-typeahead"
 import { Button } from "@/components/ui/button"
@@ -61,15 +63,20 @@ import { Skeleton } from "@/components/ui/skeleton"
 export function CubeCreateForm({
   cube,
   fields,
+  initialValues = {},
 }: {
   cube: string
   // The static field names to show, in display order.
   fields: string[]
+  // Starting values by field name (Duplicate, Add Contact from an
+  // organization). Only the fields the form shows can travel: the payload is
+  // built from the form's own fields, never from this object.
+  initialValues?: Record<string, string>
 }) {
   const router = useRouter()
   const [meta, setMeta] = useState<CubeMetadata | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
-  const [values, setValues] = useState<Record<string, string>>({})
+  const [values, setValues] = useState<Record<string, string>>(initialValues)
   const [refusal, setRefusal] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
   // The submit only exists once the client has hydrated: before that, typed
@@ -86,7 +93,7 @@ export function CubeCreateForm({
     apiFetch(metadataApiPath(cube))
       .then(async (r) => {
         if (!r.ok) throw await requestFailure("metadata", r)
-        return (await r.json()) as CubeMetadata
+        return withOrganizationDisplay(withMockFields((await r.json()) as CubeMetadata))
       })
       .then((m) => {
         if (alive) setMeta(m)
@@ -172,9 +179,10 @@ export function CubeCreateForm({
   if (!meta) return <Skeleton className="h-64 w-full" />
 
   return (
-    <Card className="w-full max-w-2xl">
+    <Card className="w-full">
       <CardContent>
-        <form onSubmit={onSubmit}>
+        {/* The panel spans the page; the single field column stays readable. */}
+        <form onSubmit={onSubmit} className="max-w-2xl">
           <FieldGroup>
             {formFields.map((f) => (
               <Field key={f.name}>

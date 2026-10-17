@@ -8,6 +8,11 @@
 // All qwbe calls go through the server-side proxy (/api/qwbe/...), so the token
 // stays in the httpOnly cookie and never reaches browser-visible code.
 
+import { APP_PAGES } from "./app-pages.ts"
+import { formatDateTime, isIsoDateTime } from "./date-time.ts"
+import { formatNumber } from "./number-format.ts"
+import { fieldError } from "./validators.ts"
+
 // The published field metadata (qwbe core/src/metadata/schemas.ts).
 export type FieldMetadata = {
   name: string
@@ -23,7 +28,17 @@ export type FieldMetadata = {
   // True when the field is a runtime-defined custom field. Its value
   // lives in the row's reserved `custom` sub-object, not at the row's top level.
   custom: boolean
+  // True for a field the backend does not publish yet, merged in from the
+  // mockup layer (src/mock). Shown marked, never edited, never sent.
+  mock?: boolean
+  // How a text value is shown: a mailto:, tel: or http link. qwbe does not
+  // publish it yet; the mock and the organization page supply it.
+  format?: FieldFormat
+  // The longest value accepted, when the backend publishes one (not yet).
+  maxLength?: number
 }
+
+export type FieldFormat = "email" | "phone" | "url"
 
 // The list query contract a cube publishes (qwbe core/src/metadata/schemas.ts
 // ListContract): what its list route actually honours. `search` names the fields
@@ -262,9 +277,74 @@ export function columnsFromFields(fields: FieldMetadata[]): ColumnSpec[] {
 }
 
 // A cell is editable exactly when the metadata says so. A field that is not
-// editable refuses editing, whatever the caller asks.
+// editable refuses editing, whatever the caller asks; a mock field has no
+// backend column to save into.
 export function canEdit(field: FieldMetadata): boolean {
-  return field.editable
+  return field.editable && !field.mock
+}
+
+// The text of one value: a reference object ({id, name}, e.g. an owner) shows
+// its name, anything else its string form.
+export function valueTextOf(value: unknown): string {
+  const name = value && typeof value === "object" ? (value as Row).name : undefined
+  return typeof name === "string" ? name : String(value)
+}
+
+// The text a value is shown with: a timestamp in the reader's local date and
+// time (never the raw ISO text), anything else as valueTextOf.
+export function displayTextOf(value: unknown): string {
+  return isIsoDateTime(value) ? formatDateTime(value) : valueTextOf(value)
+}
+
+// The text one field's value is shown with: a number of a numeric field
+// grouped by thousands (850,000), a web address without its http(s):// (and
+// a bare trailing slash), anything else as displayTextOf. A number stored in
+// a text field (a CUI, a postal code) is never regrouped. The link keeps the
+// whole address (formatHrefOf).
+export function fieldDisplayTextOf(field: FieldMetadata, value: unknown): string {
+  const numeric = field.type === "integer" || field.type === "number"
+  if (numeric && typeof value === "number") return formatNumber(value)
+  if (field.format === "url" && typeof value === "string") {
+    return value.trim().replace(/^https?:\/\//i, "").replace(/^([^/]+)\/$/, "$1")
+  }
+  return displayTextOf(value)
+}
+
+// The link a formatted value opens (vtiger shows phones, emails and websites as
+// links), or null. A website without http(s):// gets http:// in front, as in
+// vtiger, so a stored "javascript:..." can only ever become a plain web address.
+export function formatHrefOf(field: FieldMetadata, value: unknown): string | null {
+  const text = typeof value === "string" ? value.trim() : ""
+  if (text === "") return null
+  if (field.format === "email") return `mailto:${text}`
+  if (field.format === "url") return /^https?:\/\//i.test(text) ? text : `http://${text}`
+  const digits = text.replace(/[^\d+]/g, "")
+  return field.format === "phone" && digits !== "" ? `tel:${digits}` : null
+}
+
+// What the list shows around one server page. Demo rows (mockup data, never
+// from the server; the caller passes those that match the query,
+// lib/demo-search.ts) ride on top of the first page only. When everything is
+// in view the label counts it all ("5 organizations (2 + 3 demo)"), else it
+// gives the range ("1-25 of 120 organizations (+3 demo)"), so it never reads
+// "0 of 0" over visible rows.
+export type ListNoun = { one: string; other: string }
+
+export function listWindowOf(
+  page: PageOf<Row>,
+  demoRows: readonly Row[],
+  noun: ListNoun,
+): { demo: readonly Row[]; label: string } {
+  const demo = page.offset === 0 ? demoRows : []
+  const real = page.rows.length
+  const counted = (n: number) => `${formatNumber(n)} ${n === 1 ? noun.one : noun.other}`
+  if (page.offset === 0 && (real === 0 || real === page.total)) {
+    const parts = demo.length === 0 ? "" : real === 0 ? ` (${demo.length} demo)` : ` (${formatNumber(real)} + ${demo.length} demo)`
+    return { demo, label: `${counted(real + demo.length)}${parts}` }
+  }
+  const range = real === 0 ? "0" : `${formatNumber(page.offset + 1)}-${formatNumber(page.offset + real)}`
+  const of = page.total === undefined ? ` ${noun.other}` : ` of ${counted(page.total)}`
+  return { demo, label: `${range}${of}${demo.length > 0 ? ` (+${demo.length} demo)` : ""}` }
 }
 
 // The sort a column click produces: undefined for a column the metadata does
@@ -359,14 +439,12 @@ export async function requestFailure(what: string, response: Response): Promise<
   )
 }
 
-// The frontend routes this app actually has. A relation whose target has no
-// route renders as plain text instead of a dead link.
-const RELATION_ROUTES: Record<string, string> = {
-  "crm/organizations": "/organizations",
-  "crm/contacts": "/contacts",
-  organizations: "/organizations",
-  contacts: "/contacts",
-}
+// The record routes this app actually has, from the pages registry, under the
+// full cube name and its leaf. A relation whose target has no route renders as
+// plain text instead of a dead link.
+const RELATION_ROUTES: Record<string, string> = Object.fromEntries(
+  APP_PAGES.flatMap((page) => (page.cube ? [[page.cube, page.href], [httpPrefixOf(page.cube), page.href]] : [])),
+)
 
 // Builds the link for a related row, or null when the target cube has no
 // frontend route (for example crm/contracts): the caller then renders text.
@@ -456,6 +534,7 @@ export function createPayloadOf(
   const payload: Record<string, unknown> = {}
   const missing: string[] = []
   for (const field of fields) {
+    if (field.mock) continue
     const value = (values[field.name] ?? "").trim()
     if (value === "" && field.type !== "boolean") {
       if (field.required) missing.push(field.label)
@@ -527,6 +606,9 @@ export type SaveResult =
 // without a DOM: PATCHes exactly the edited key, merges ONLY that key from the
 // response (an out-of-order stale body must not overwrite newer columns), and
 // returns qwbe's own message -- matched to the edited field -- on refusal.
+// A changed value first passes the generic check every form runs
+// (lib/validators.ts): an emptied required field or a malformed value is
+// refused here, in the cell, and never sent.
 //
 // The pre-edit value is derived HERE, from the row and the field, via the same
 // customValueOf the cell renders with. A caller cannot hand in a "current": a
@@ -541,8 +623,11 @@ export async function saveCell(opts: {
   doFetch: typeof fetch
 }): Promise<SaveResult> {
   const { rowPath, row, field, next, doFetch } = opts
+  if (field.mock) return { status: "refused", message: "mock field: not saved" }
   const current = customValueOf(row, field)
   if (next === String(current ?? "")) return { status: "unchanged" }
+  const invalid = fieldError(field, next)
+  if (invalid) return { status: "refused", message: invalid }
   // One path for static AND custom fields: a custom field is saved through the
   // TARGET cube's own PATCH, the kernel folds the undeclared key into the
   // row's `custom` sub-object and validates it against the definition, and a

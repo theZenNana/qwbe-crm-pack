@@ -23,12 +23,14 @@ import {
   qwbeClient,
 } from "./lib.mjs"
 import { CONTACT_LINKED, ORG_A, ORG_B } from "./seed.mjs"
+// Circular on purpose: list-scenarios uses the helpers below, at call time only.
+import { scenarioListActions, scenarioListUrl, scenarioReaderEcho } from "./list-scenarios.mjs"
 
 // Read at call time: the runner sets CONFIG.frontendPort after picking a free port.
 const FE = () => `http://localhost:${CONFIG.frontendPort}`
 
 const tabs = []
-async function open(path) {
+export async function open(path) {
   const r = orca("tab", "create", "--url", `${FE()}${path}`)
   orca("tab", "switch", "--page", r.browserPageId, "--focus")
   tabs.push(r.browserPageId)
@@ -123,7 +125,7 @@ async function loginThroughUi(username, password) {
  * the same ref — a stale ref is re-resolved, never re-clicked blindly.
  * Returns the ref that was clicked, or null when nothing matched.
  */
-async function clickStable(pred, name) {
+export async function clickStable(pred, name) {
   for (let i = 0; i < 8; i++) {
     const snap = snapshot()
     const entry = Object.entries(snap.refs).find(([, v]) => pred(v))
@@ -153,14 +155,14 @@ async function findStable(pred) {
   return null
 }
 
-async function settle(text, timeout = 30_000) {
+export async function settle(text, timeout = 30_000) {
   const ok = await waitForText(text, timeout)
   if (!ok) throw new Error(`page never showed ${JSON.stringify(text)}`)
 }
 
 // Short settle after a click that triggers a React render: the next snapshot
 // must see the DOM the click produced, not the one before it.
-const pause = async (ms = 800) => {
+export const pause = async (ms = 800) => {
   await new Promise((r) => setTimeout(r, ms))
   // Touch the page with a trivial eval: the accessibility snapshot served
   // right after a render can lag the DOM, and this forces Orca to re-read it.
@@ -248,20 +250,20 @@ export async function scenarioList() {
     return record(name, "RED", `list does not show both seeded orgs (${snap.origin})`, "02-organizations-list-RED.png")
   }
 
-  // Sorting: click the Name header's sort BUTTON twice for a descending sort, then
-  // Beta must come first. The role matters: the columnheader cell carries the same
-  // name and clicking it does nothing.
-  const sortBtn = (refs) =>
-    Object.entries(refs).find(([ , v]) => v.role === "button" && (v.name ?? "").startsWith("Name"))?.[0]
-  const header = sortBtn(snap.refs)
-  if (!header) {
+  // Sorting: click the Organization Name header's sort BUTTON twice for a
+  // descending sort, then Beta must come first. The role matters: the
+  // columnheader cell carries the same name and clicking it does nothing. The
+  // demo rows ride on top and contain neither seeded name.
+  const SORT = "Organization Name"
+  const sortBtn = (v) => v.role === "button" && (v.name ?? "").startsWith(SORT)
+  if (!Object.values(snap.refs).some(sortBtn)) {
     shot("02-sort-RED", { full: true })
-    return record(name, "RED", "Name column header not clickable", "02-sort-RED.png")
+    return record(name, "RED", `${SORT} column header not clickable`, "02-sort-RED.png")
   }
-  await clickStable((v) => v.role === "button" && (v.name ?? "").startsWith("Name"))
-  await waitForText("Name ↑")
-  await clickStable((v) => v.role === "button" && (v.name ?? "").startsWith("Name"))
-  await waitForText("Name ↓")
+  await clickStable(sortBtn)
+  await waitForText(`${SORT} ↑`)
+  await clickStable(sortBtn)
+  await waitForText(`${SORT} ↓`)
   snap = snapshot()
   shot("02-organizations-sorted-desc")
   const betaFirst = snap.text.indexOf(ORG_B) >= 0 && snap.text.indexOf(ORG_B) < snap.text.indexOf(ORG_A)
@@ -270,11 +272,12 @@ export async function scenarioList() {
     return record(name, "RED", "sorting by name descending did not put Beta before Alpha", "02-sort-RED.png")
   }
 
-  // Searching: the Name filter narrows the list to Alpha only.
-  const filter = await clickStable((v) => v.role === "textbox" && v.name === "Filter by Name", "Filter by Name")
+  // Searching: the quick search (a prefix of the name) narrows the list to Alpha only.
+  const SEARCH = "Search (prefix match)"
+  const filter = await clickStable((v) => (v.role === "searchbox" || v.role === "textbox") && v.name === SEARCH, SEARCH)
   if (!filter) {
     shot("02-search-RED", { full: true })
-    return record(name, "RED", "Name filter input not found", "02-search-RED.png")
+    return record(name, "RED", "quick search box not found", "02-search-RED.png")
   }
   type(ORG_A)
   // Every operand is a settled value: waitForText is awaited on its own line,
@@ -288,7 +291,7 @@ export async function scenarioList() {
   const narrowed = alphaShown && betaGone
   snap = snapshot()
   shot("02-organizations-searched")
-  return record(name, narrowed ? "PASS" : "RED", narrowed ? "sorted desc and filtered to Alpha" : "filter did not narrow the list", "02-organizations-searched.png")
+  return record(name, narrowed ? "PASS" : "RED", narrowed ? "sorted desc and searched to Alpha" : "search did not narrow the list", "02-organizations-searched.png")
 }
 
 // --- 3. inline edit on an editable field saves without a reload -----------------
@@ -439,7 +442,8 @@ export async function scenarioNonEditable(api) {
 // --- 5. organization -> contact -> back to the organization ---------------------
 export async function scenarioNavigation(seed) {
   const name = "navigation organization to contact and back"
-  await open(`/organizations/${seed.orgA.id}`)
+  // The related contacts are on the More Information tab (T-1814).
+  await open(`/organizations/${seed.orgA.id}?tab=more`)
   await settle(CONTACT_LINKED)
   let snap = snapshot()
   shot("05-organization-detail")
@@ -470,13 +474,15 @@ export async function scenarioNavigation(seed) {
 export async function scenarioLogout() {
   const name = "logout returns to the login page and the identity page is gone"
   await open("/me")
-  await settle("Log out")
+  await settle("Signed in as")
   let snap = snapshot()
   shot("06-me-before-logout")
-  const btn = await clickStable((v) => v.role === "button" && v.name === "Log out", "Log out")
+  // Sign out lives in the shell's account menu (T-1812): open it, then pick the item.
+  const menu = await clickStable((v) => v.role === "button" && String(v.name).startsWith("Account menu"), "Account menu")
+  const btn = menu && (await clickStable((v) => v.role === "menuitem" && v.name === "Sign out", "Sign out"))
   if (!btn) {
     shot("06-logout-RED", { full: true })
-    return record(name, "RED", "logout button not found on the identity page", "06-logout-RED.png")
+    return record(name, "RED", "Sign out not found in the account menu", "06-logout-RED.png")
   }
   const back = await waitForUrl(".*/login.*")
   snap = snapshot()
@@ -501,9 +507,9 @@ export async function scenarioLogout() {
 
 // --- 10. create an organization through the F1 form ------------------------------
 // (Numbered 10 at authoring time; it runs between 05 and 07 in runAll.) The
-// create form is the F1 surface: the page names the basic field set, the
-// metadata supplies labels and required flags, the submit goes through the
-// server proxy and lands on the new row's detail page. externalId must NOT be
+// create form is the shared organization form (T-1815): vtiger's blocks, the
+// required fields marked, the submit through the server proxy, landing on the
+// new row's detail page. externalId must NOT be
 // offered: it carries the import identity, and
 // its unique partial index turns a hand-typed duplicate into a 500, not a
 // refusal.
@@ -515,7 +521,7 @@ export async function scenarioCreateOrganization(api) {
   let snap = snapshot()
   shot("10-create-form")
   const externalOffered = Object.values(snap.refs).some((v) => (v.name ?? "") === "External Id")
-  const nameBox = await clickStable((v) => v.role === "textbox" && v.name === "Name", "Name")
+  const nameBox = await clickStable((v) => v.role === "textbox" && v.name === "Organization Name", "Name")
   if (!nameBox || externalOffered) {
     shot("10-create-RED", { full: true })
     return record(
@@ -526,12 +532,41 @@ export async function scenarioCreateOrganization(api) {
     )
   }
   type(orgName)
-  const industryBox = await clickStable((v) => v.role === "textbox" && v.name === "Industry", "Industry")
-  if (industryBox) type("e2e manufacturing")
-  const submit = await clickStable((v) => v.role === "button" && v.name === "Create", "Create")
+  // The billing address, required on every save (organizations-backend.md §12).
+  for (const [label, value] of [
+    ["Billing Address", "Str. E2E nr. 1"],
+    ["Billing City", "E2E City"],
+    ["Billing Country", "Romania"],
+  ]) {
+    if (!(await clickStable((v) => v.role === "textbox" && v.name === label, label))) {
+      shot("10-create-RED", { full: true })
+      return record(name, "RED", `no ${label} input on the create form`, "10-create-RED.png")
+    }
+    type(value)
+  }
+  // Industry, required by vtiger (the form requires it once the metadata
+  // does): a select of vtiger's P4 values (pick the first one offered); typed
+  // only if it is ever a text input again.
+  const industryRef = await findStable((v) => (v.role === "combobox" || v.role === "textbox") && v.name === "Industry")
+  const industryRole = industryRef ? snapshot().refs[industryRef]?.role : null
+  if (industryRole === "textbox") {
+    await clickStable((v) => v.role === "textbox" && v.name === "Industry", "Industry")
+    type("e2e manufacturing")
+  } else {
+    const option = industryRef && (await openSelect(industryRef))
+      ? Object.entries(snapshot().refs).find(([, v]) => v.role === "option")?.[0]
+      : null
+    if (!option) {
+      shot("10-create-RED", { full: true })
+      return record(name, "RED", "no Industry select with P4 values on the form", "10-create-RED.png")
+    }
+    click(option, snapshot().refs[option]?.name)
+    await pause()
+  }
+  const submit = await clickStable((v) => v.role === "button" && v.name === "Save", "Save")
   if (!submit) {
     shot("10-create-RED", { full: true })
-    return record(name, "RED", "no Create button on the form", "10-create-RED.png")
+    return record(name, "RED", "no Save button on the form", "10-create-RED.png")
   }
   // The detail route is /organizations/<id>; /organizations/new must NOT match.
   const landed = await waitForUrl("organizations/(?!new)", 20_000)
@@ -848,9 +883,9 @@ const N_LABEL = "E2E Note"
  * Define one field through the open panel; fresh snapshot for every step.
  *
  * `required` ticks the panel's Required box before the field is added: the
- * refusal this suite asserts on ("... is required and cannot be emptied")
- * only exists for a field the definition actually marks required, and the
- * panel starts every new field optional.
+ * refusal this suite asserts on ("<label> is required", the cell's generic
+ * check) only exists for a field the definition actually marks required, and
+ * the panel starts every new field optional.
  */
 async function defineField(name, label, typeName, options, required = false) {
   for (let i = 0; i < 20; i++) {
@@ -1083,8 +1118,9 @@ export async function scenarioCustomFieldTypes(api, seed) {
   if (!ok) return record(name, "RED", `the ${D_LABEL} editor did not open`, "09-date-RED.png")
   const dateShown = await waitForText("2026-01-02", 10_000)
 
-  // The required text field: set a value first, then empty it. The refusal
-  // must be qwbe's own message, shown in that cell, with the old value kept.
+  // The required text field: set a value first, then empty it. The cell's
+  // generic check refuses it ("<label> is required") before any request,
+  // shown in that cell, with the old value kept in qwbe.
   const noteOpen1 = await openCellEditor(N_LABEL)
   let noteTyped1 = false
   for (let i = 0; i < 10 && !noteTyped1; i++) {
@@ -1114,7 +1150,7 @@ export async function scenarioCustomFieldTypes(api, seed) {
       await new Promise((r) => setTimeout(r, 500))
     }
   }
-  const refused = await waitForText("cannot be emptied", 15_000)
+  const refused = await waitForText(`${N_LABEL} is required`, 15_000)
   snap = snapshot()
   shot("09-required-refused")
   const noteDetail = `note open=${noteOpen1}/${noteOpen2} typed=${noteTyped1}/${noteTyped2} hello=${helloShown} refused=${refused}`
@@ -1157,7 +1193,7 @@ export async function scenarioCustomFieldTypes(api, seed) {
     name,
     pass ? "PASS" : "RED",
     pass
-      ? "number 7, bool yes, date 2026-01-02 in the cells and the backend; the emptied required field refused with qwbe's message; every definition gone from qwbe"
+      ? "number 7, bool yes, date 2026-01-02 in the cells and the backend; the emptied required field refused in the cell; every definition gone from qwbe"
       : `${noteDetail} values=${JSON.stringify(custom).slice(0, 120)} cleaned=${cleaned} date=${dateShown} leftOver=${leftOver.join(",") || "none"}`,
     "09-required-refused.png",
   )
@@ -1420,6 +1456,8 @@ export async function runAll(api, seed) {
     return verdicts
   }
   verdicts.push(await scenarioList())
+  verdicts.push(await scenarioListActions(seed))
+  verdicts.push(await scenarioListUrl())
   verdicts.push(await scenarioInlineEdit(api))
   verdicts.push(await scenarioNonEditable(api))
   verdicts.push(await scenarioNavigation(seed))
@@ -1431,5 +1469,6 @@ export async function runAll(api, seed) {
   verdicts.push(await scenarioCustomFieldTypes(api, seed))
   verdicts.push(await scenarioLogout())
   verdicts.push(await scenarioReader(CONFIG.qwbePort))
+  verdicts.push(await scenarioReaderEcho())
   return verdicts
 }

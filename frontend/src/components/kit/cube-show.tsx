@@ -1,7 +1,8 @@
 "use client"
 
 // The reusable kit-based detail and in-place edit renderer (QWB-53 / QWB-54,
-// merged): the SAME component renders Contacts and Organizations. One entity
+// merged), used by Contacts (Organizations has its vtiger layout in
+// components/organizations, built from the same pieces). One entity
 // page supplies only its field grouping by name; everything else -- labels,
 // values, editability, relation links, runtime custom fields, the title --
 // comes from the published cube metadata and the row. The frame, card, field
@@ -21,10 +22,8 @@
 // button and the other pencils are hidden, so a draft is never mixed with
 // "Edit all" or dropped silently. Escape cancels the single-field draft.
 
-import Link from "next/link"
-import { useEffect, useMemo, useRef, useState } from "react"
-import { CopyIcon, PencilIcon } from "lucide-react"
-import { toast } from "sonner"
+import { useMemo } from "react"
+import { PencilIcon } from "lucide-react"
 
 import {
   Card,
@@ -38,69 +37,48 @@ import {
 } from "shadcn-admin-kit"
 
 import {
-  apiFetch,
   canEdit,
   groupFields,
-  hrefForRelation,
-  metadataApiPath,
   titleOf,
-  type CubeMetadata,
   type FieldGroupSpec,
   type FieldMetadata,
   type FieldSection,
   type Row,
-  requestFailure,
 } from "@/lib/cube.ts"
-import {
-  changedPayloadOf,
-  copyText,
-  displayRowOf,
-  escapeCancels,
-  fieldsInEditOf,
-  initialValuesOf,
-  type EditScope,
-} from "@/lib/kit-form.ts"
+import { MockTag } from "@/components/mock-tag"
+import { CHECK_FIELDS, displayRowOf, escapeCancels, fieldTextOf, shownRefusalOf } from "@/lib/kit-form.ts"
 import { cn } from "@/lib/utils"
 import { KitFieldInput } from "./field-input"
+import { CopyButton } from "./copy-button"
+import { FieldValue } from "./field-value"
+import { FieldRefusals } from "./field-refusals"
+import { FocusOnMount } from "./focus-on-mount"
 import { relationRefsOf } from "@/lib/relation-batch.ts"
+import { useCubeMetadata } from "@/hooks/use-cube-metadata"
+import { useEditOnOpen } from "@/hooks/use-edit-on-open"
+import { useInPlaceEdit } from "@/hooks/use-in-place-edit"
 import { useRelationTitles } from "@/hooks/use-relation-titles"
-import { Form, RecordContextProvider, useGetOne, useUpdate } from "ra-core"
+import { Form, RecordContextProvider, useGetOne } from "ra-core"
 
 export function CubeKitShow({
   cube,
   id,
   groups,
+  demo = false,
 }: {
   cube: string
   id: string
+  // A demo record (mockup data): marked, and read-only -- no Edit, no pencils.
+  demo?: boolean
   // Fieldsets by field NAME (lib/cube.ts groupFields); leftovers and custom
   // fields get their own sections, so nothing published is hidden.
   groups: readonly FieldGroupSpec[]
 }) {
-  const [meta, setMeta] = useState<CubeMetadata | null>(null)
-  const [loadError, setLoadError] = useState<string | null>(null)
+  const { meta, error: loadError } = useCubeMetadata(cube)
   const {
     data: row,
     error: rowError,
   } = useGetOne(cube, { id })
-
-  useEffect(() => {
-    let alive = true
-    apiFetch(metadataApiPath(cube))
-      .then(async (r) => {
-        if (!r.ok) throw await requestFailure("metadata", r)
-        return (await r.json()) as CubeMetadata
-      })
-      .then((m) => {
-        if (alive) setMeta(m)
-      })
-      .catch((e: unknown) => {
-        if (alive) setLoadError(e instanceof Error ? e.message : String(e))
-      })
-    return () => {
-      alive = false
-    }
-  }, [cube])
 
   const error = loadError ?? (rowError ? String((rowError as Error).message) : null)
 
@@ -121,68 +99,26 @@ export function CubeKitShow({
     [meta, row],
   )
   const editableFields = useMemo(
-    () => sections.flatMap((s) => s.fields).filter(canEdit),
-    [sections],
+    () => (demo ? [] : sections.flatMap((s) => s.fields).filter(canEdit)),
+    [sections, demo],
   )
 
-  // In-place editing: the form mounts when Edit (all fields) or a pencil (one
-  // field) is pressed, so its defaults are the values shown at that moment,
-  // and unmounts on Save or Cancel, which is what discards unsaved drafts. A
-  // refusal leaves it mounted. Only the fields in scope can change or travel.
-  const [editing, setEditing] = useState<EditScope>(null)
-  const [refusal, setRefusal] = useState<string | null>(null)
-  const [update, { isPending }] = useUpdate()
-  const fieldsInEdit = useMemo(() => fieldsInEditOf(editableFields, editing), [editableFields, editing])
-  const initial = useMemo(
-    () => (flatRow ? initialValuesOf(fieldsInEdit, flatRow) : {}),
-    [fieldsInEdit, flatRow],
+  // In-place editing (hooks/use-in-place-edit.ts): Edit opens every editable
+  // field, a pencil exactly one; Save PATCHes only the changed keys.
+  const { editing, fieldsInEdit, refusal, isPending, initial, open, cancel, onSubmit } = useInPlaceEdit({
+    cube,
+    id,
+    row: row as Row | undefined,
+    flatRow,
+    editableFields,
+  })
+  // Every field in edit renders its input here (Edit all and a pencil alike).
+  const refused = useMemo(
+    () => (refusal && meta ? shownRefusalOf(refusal, fieldsInEdit, meta.fields) : null),
+    [refusal, fieldsInEdit, meta],
   )
-
-  // Opening a draft drops any refusal left by an earlier one (a save that
-  // answered after its form was already closed), so it cannot surface under
-  // the wrong field.
-  function open(scope: Exclude<EditScope, null>) {
-    setRefusal(null)
-    setEditing(scope)
-  }
-
-  function cancel() {
-    const closed = editing
-    setRefusal(null)
-    setEditing(null)
-    // Focus goes back to the pencil that opened a single field (it re-renders
-    // after the state change, hence the frame delay).
-    if (closed && closed !== "all") {
-      requestAnimationFrame(() => {
-        document.querySelector<HTMLElement>(`[data-edit-field="${CSS.escape(closed)}"]`)?.focus()
-      })
-    }
-  }
-
-  async function onSubmit(values: Record<string, string | boolean>) {
-    const { payload, missing } = changedPayloadOf(fieldsInEdit, initial, values)
-    if (missing.length > 0) {
-      setRefusal(`Required: ${missing.join(", ")}`)
-      return
-    }
-    if (Object.keys(payload).length === 0) {
-      cancel()
-      return
-    }
-    try {
-      // Pessimistic through ra-core so the getOne cache -- and this page --
-      // shows what qwbe actually stored (custom values fold into `custom`).
-      await update(
-        cube,
-        { id, data: payload, previousData: row as Row },
-        { returnPromise: true, mutationMode: "pessimistic" },
-      )
-      toast.success("Saved")
-      cancel()
-    } catch (e: unknown) {
-      setRefusal(refusalTextOf(e, fieldsInEdit))
-    }
-  }
+  // "edit" from a related list opens the record in edit mode (?edit=all).
+  useEditOnOpen(flatRow !== null, editableFields.length > 0, () => open("all"))
 
   if (error) return <p role="alert">{error}</p>
   if (!meta || !row || !flatRow) return <Skeleton className="h-64 w-full" />
@@ -191,17 +127,24 @@ export function CubeKitShow({
     <RecordField
       key={field.name}
       source={field.name}
-      label={field.label}
+      label={
+        <>
+          {field.label}
+          {field.mock && <MockTag />}
+        </>
+      }
       className="min-w-0 gap-1 break-words text-sm"
       render={(record: Row) => {
-        const text = textOf(field, record, resolveTitle)
+        const text = fieldTextOf(field, record, resolveTitle)
         return (
           <span className="flex items-center gap-1">
-            <span className="min-w-0 flex-1">{showValueOf(field, record, text)}</span>
+            <span className="min-w-0 flex-1">
+              <FieldValue field={field} record={record} text={text} />
+            </span>
             {text !== null && <CopyButton label={field.label} text={text} />}
             {/* The pencil exists only while no draft is open: an open draft
                 must be saved or cancelled before another field or Edit all. */}
-            {editing === null && canEdit(field) && (
+            {editing === null && !demo && canEdit(field) && (
               <Button
                 type="button"
                 variant="ghost"
@@ -234,10 +177,14 @@ export function CubeKitShow({
         }
       }}
     >
-      <KitFieldInput field={field} />
-      {refusal && (
+      {/* The kit's error line has no live region: this one announces it. */}
+      <div aria-live="polite">
+        <KitFieldInput field={field} />
+      </div>
+      {/* One input: its own error says it all, so no "check the fields" line. */}
+      {refused && refused.message !== CHECK_FIELDS && (
         <p role="alert" className="text-sm text-destructive">
-          {refusal}
+          {refused.message}
         </p>
       )}
       <div className="flex items-center gap-2">
@@ -253,19 +200,23 @@ export function CubeKitShow({
     sections.map((section) => <Section key={section.legend} section={section} cell={cell} />)
 
   return (
-    <div className="flex w-full max-w-5xl flex-col gap-4">
+    <div className="flex w-full flex-col gap-4">
       <Card>
         <CardHeader className="border-b">
-          <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Record details</p>
-          <CardTitle className="text-2xl">{titleOf(meta, row as Row)}</CardTitle>
+          <p className="label-mono text-muted-foreground">Record details</p>
+          <CardTitle className="text-2xl">
+            {titleOf(meta, row as Row)}
+            {demo && <MockTag>demo</MockTag>}
+          </CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           {editing === "all" ? (
             <Form defaultValues={initial} onSubmit={onSubmit} className="flex flex-col gap-4">
+              <FieldRefusals fieldErrors={refused?.fieldErrors} />
               <div className="flex flex-wrap items-center justify-end gap-2">
-                {refusal && (
+                {refused && (
                   <p role="alert" className="mr-auto text-sm text-destructive">
-                    {refusal}
+                    {refused.message}
                   </p>
                 )}
                 {/* label spelled out: without an i18n provider the kit's
@@ -292,6 +243,7 @@ export function CubeKitShow({
               onSubmit={onSubmit}
               className="flex flex-col gap-4"
             >
+              <FieldRefusals fieldErrors={refused?.fieldErrors} />
               <RecordContextProvider value={flatRow}>
                 {fieldsets((field) => (field.name === editing ? single(field) : shown(field)))}
               </RecordContextProvider>
@@ -310,21 +262,6 @@ export function CubeKitShow({
           )}
         </CardContent>
       </Card>
-    </div>
-  )
-}
-
-// Moves keyboard focus to the first focusable control inside on mount, so a
-// field opened with the pencil is ready to type into (the kit inputs do not
-// take an autoFocus prop).
-function FocusOnMount({ children, ...rest }: React.ComponentProps<"div">) {
-  const ref = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    ref.current?.querySelector<HTMLElement>("input, select, textarea, [role=combobox], button")?.focus()
-  }, [])
-  return (
-    <div ref={ref} {...rest}>
-      {children}
     </div>
   )
 }
@@ -354,73 +291,5 @@ function Section({
       </legend>
       <div className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-2">{section.fields.map(cell)}</div>
     </fieldset>
-  )
-}
-
-// The refusal shown on the form: qwbe's own message, followed by each
-// per-field issue the provider mapped (HttpError body.errors) under the
-// field's label, so the user learns WHICH input was refused.
-function refusalTextOf(e: unknown, fields: readonly FieldMetadata[]): string {
-  const message = e instanceof Error ? e.message : String(e)
-  const errors = (e as { body?: { errors?: Record<string, string> } }).body?.errors ?? {}
-  const details = Object.entries(errors).map(([name, text]) => {
-    const label = fields.find((f) => f.name === name)?.label ?? name
-    return `${label}: ${text}`
-  })
-  return details.length > 0 ? `${message} (${details.join("; ")})` : message
-}
-
-// A discreet copy action next to a value: named for screen readers, sized
-// for a finger (36px), never enters edit mode, reports a clipboard refusal
-// (no Clipboard API on an insecure origin, denied permission) instead of
-// failing silently.
-function CopyButton({ label, text }: { label: string; text: string }) {
-  async function copy() {
-    const failure = await copyText(text)
-    if (failure === null) toast.success(`${label} copied`)
-    else toast.error(`Copy failed: ${failure}`)
-  }
-  return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon"
-      className="size-9 shrink-0 text-muted-foreground"
-      aria-label={`Copy ${label}`}
-      onClick={copy}
-    >
-      <CopyIcon aria-hidden />
-    </Button>
-  )
-}
-
-// The displayed text of one field in the flattened row, or null when empty:
-// a relation shows the target's title resolved through the relation metadata,
-// a boolean yes/no, anything else its text. This is exactly what Copy copies.
-type ResolveTitle = (target: string, id: string) => string | null
-
-function textOf(field: FieldMetadata, record: Row, resolveTitle: ResolveTitle): string | null {
-  const value = record[field.name]
-  if (value === null || value === undefined || value === "") return null
-  if (field.relation) {
-    const id = String(value)
-    return resolveTitle(field.relation.target, id) ?? id
-  }
-  if (field.type === "boolean") return value ? "yes" : "no"
-  return String(value)
-}
-
-// The rendered value: the text, linked to the target's page for a relation
-// when this app has a route for it (Next's Link -- the organization relation
-// keeps its navigation), a dash when empty.
-function showValueOf(field: FieldMetadata, record: Row, text: string | null): React.ReactNode {
-  if (text === null) return "—"
-  const href = field.relation ? hrefForRelation(field.relation.target, String(record[field.name])) : null
-  return href ? (
-    <Link className="underline" href={href}>
-      {text}
-    </Link>
-  ) : (
-    text
   )
 }

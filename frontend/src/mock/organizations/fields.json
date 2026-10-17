@@ -1,0 +1,376 @@
+[
+  {
+    "name": "modifiedAt",
+    "label": "Modified Time",
+    "type": "string",
+    "format": null,
+    "required": false,
+    "editable": false,
+    "nullable": false,
+    "picklist": null,
+    "relation": null,
+    "vtiger": {
+      "field": "modifiedtime",
+      "block": "Organization Information",
+      "sequence": 2,
+      "maxLength": null
+    }
+  },
+  {
+    "name": "legalForm",
+    "label": "Form",
+    "type": "string",
+    "format": null,
+    "required": true,
+    "editable": true,
+    "nullable": false,
+    "picklist": "P1",
+    "relation": null,
+    "vtiger": {
+      "field": "cf_658",
+      "block": "Organization Information",
+      "sequence": 9,
+      "maxLength": 255
+    }
+  },
+  {
+    "name": "vatPayer",
+    "label": "TVA",
+    "type": "boolean",
+    "format": null,
+    "required": true,
+    "editable": true,
+    "nullable": false,
+    "picklist": null,
+    "relation": null,
+    "vtiger": {
+      "field": "cf_665",
+      "block": "Organization Information",
+      "sequence": 12,
+      "maxLength": null
+    }
+  },
+  {
+    "name": "cui",
+    "label": "CUI",
+    "type": "string",
+    "format": null,
+    "required": true,
+    "editable": true,
+    "nullable": false,
+    "picklist": null,
+    "relation": null,
+    "vtiger": {
+      "field": "cf_666",
+      "block": "Organization Information",
+      "sequence": 14,
+      "maxLength": 20
+    }
+  },
+  {
+    "name": "tradeRegisterNo",
+    "label": "Reg no",
+    "type": "string",
+    "format": null,
+    "required": false,
+    "editable": true,
+    "nullable": true,
+    "picklist": null,
+    "relation": null,
+    "vtiger": {
+      "field": "cf_670",
+      "block": "Organization Information",
+      "sequence": 17,
+      "maxLength": 20
+    }
+  },
+  {
+    "name": "customerCategory",
+    "label": "Category",
+    "type": "string",
+    "format": null,
+    "required": false,
+    "editable": true,
+    "nullable": true,
+    "picklist": "P7",
+    "relation": null,
+    "vtiger": {
+      "field": "cf_679",
+      "block": "Organization Information",
+      "sequence": 19,
+      "maxLength": 255
+    }
+  },
+  {
+    "name": "assignedTo",
+    "label": "Assigned To",
+    "type": "object",
+    "format": null,
+    "required": true,
+    "editable": true,
+    "nullable": false,
+    "picklist": null,
+    "relation": null,
+    "vtiger": {
+      "field": "assigned_user_id",
+      "block": "Organization Information",
+      "sequence": 23,
+      "maxLength": null
+    }
+  },
+  {
+    "name": "otherPhone",
+    "label": "Other Phone",
+    "type": "string",
+    "format": "phone",
+    "required": false,
+    "editable": true,
+    "nullable": true,
+    "picklist": null,
+    "relation": null,
+    "vtiger": {
+      "field": "otherphone",
+      "block": "Organization Information",
+      "sequence": 27,
+      "maxLength": 30
+    }
+  },
+  {
+    "name": "mobilePhone",
+    "label": "Comp Mobile Phone",
+    "type": "string",
+    "format": "phone",
+    "required": false,
+    "editable": true,
+    "nullable": true,
+    "picklist": null,
+    "relation": null,
+    "vtiger": {
+      "field": "cf_677",
+      "block": "Organization Information",
+      "sequence": 30,
+      "maxLength": 15
+    }
+  },
+  {
+    "name": "annualRevenue",
+    "label": "Annual Revenue",
+    "type": "integer",
+    "format": null,
+    "required": false,
+    "editable": true,
+    "nullable": true,
+    "picklist": null,
+    "relation": null,
+    "vtiger": {
+      "field": "annual_revenue",
+      "block": "Organization Information",
+      "sequence": 32,
+      "maxLength": null
+    }
+  },
+  {
+    "name": "fax",
+    "label": "Fax",
+    "type": "string",
+    "format": "phone",
+    "required": false,
+    "editable": true,
+    "nullable": true,
+    "picklist": null,
+    "relation": null,
+    "vtiger": {
+      "field": "fax",
+      "block": "Organization Information",
+      "sequence": 33,
+      "maxLength": 30
+    }
+  },
+  {
+    "name": "caenCode",
+    "label": "SIC Code",
+    "type": "string",
+    "format": null,
+    "required": false,
+    "editable": true,
+    "nullable": true,
+    "picklist": null,
+    "relation": null,
+    "vtiger": {
+      "field": "siccode",
+      "block": "Organization Information",
+      "sequence": 36,
+      "maxLength": 50
+    }
+  },
+  {
+    "name": "industrySpec",
+    "label": "Industry Spec",
+    "type": "string",
+    "format": null,
+    "required": false,
+    "editable": true,
+    "nullable": true,
+    "picklist": null,
+    "relation": null,
+    "vtiger": {
+      "field": "cf_703",
+      "block": "Organization Information",
+      "sequence": 46,
+      "maxLength": 50
+    }
+  },
+  {
+    "name": "modifiedBy",
+    "label": "Last Modified By",
+    "type": "object",
+    "format": null,
+    "required": false,
+    "editable": false,
+    "nullable": false,
+    "picklist": null,
+    "relation": null,
+    "vtiger": {
+      "field": "modifiedby",
+      "block": "Organization Information",
+      "sequence": 49,
+      "maxLength": null
+    }
+  },
+  {
+    "name": "shippingStreet",
+    "label": "Shipping Address",
+    "type": "string",
+    "format": null,
+    "required": false,
+    "editable": true,
+    "nullable": true,
+    "picklist": null,
+    "relation": null,
+    "vtiger": {
+      "field": "ship_street",
+      "block": "Address Information",
+      "sequence": 2,
+      "maxLength": 250
+    }
+  },
+  {
+    "name": "shippingCity",
+    "label": "Shipping City",
+    "type": "string",
+    "format": null,
+    "required": false,
+    "editable": true,
+    "nullable": true,
+    "picklist": null,
+    "relation": null,
+    "vtiger": {
+      "field": "ship_city",
+      "block": "Address Information",
+      "sequence": 6,
+      "maxLength": 30
+    }
+  },
+  {
+    "name": "billingState",
+    "label": "Billing State",
+    "type": "string",
+    "format": null,
+    "required": true,
+    "editable": true,
+    "nullable": false,
+    "picklist": "P2",
+    "relation": null,
+    "vtiger": {
+      "field": "bill_state",
+      "block": "Address Information",
+      "sequence": 7,
+      "maxLength": 30
+    }
+  },
+  {
+    "name": "shippingState",
+    "label": "Shipping State",
+    "type": "string",
+    "format": null,
+    "required": false,
+    "editable": true,
+    "nullable": true,
+    "picklist": "P2",
+    "relation": null,
+    "vtiger": {
+      "field": "ship_state",
+      "block": "Address Information",
+      "sequence": 8,
+      "maxLength": 30
+    }
+  },
+  {
+    "name": "shippingCode",
+    "label": "Shipping Postal Code",
+    "type": "string",
+    "format": null,
+    "required": false,
+    "editable": true,
+    "nullable": true,
+    "picklist": null,
+    "relation": null,
+    "vtiger": {
+      "field": "ship_code",
+      "block": "Address Information",
+      "sequence": 12,
+      "maxLength": 30
+    }
+  },
+  {
+    "name": "shippingCountry",
+    "label": "Shipping Country",
+    "type": "string",
+    "format": null,
+    "required": false,
+    "editable": true,
+    "nullable": true,
+    "picklist": null,
+    "relation": null,
+    "vtiger": {
+      "field": "ship_country",
+      "block": "Address Information",
+      "sequence": 14,
+      "maxLength": 30
+    }
+  },
+  {
+    "name": "billingSector",
+    "label": "Billing Sector",
+    "type": "integer",
+    "format": null,
+    "required": true,
+    "editable": true,
+    "nullable": true,
+    "picklist": null,
+    "relation": null,
+    "vtiger": {
+      "field": null,
+      "block": "Address Information",
+      "sequence": 15,
+      "maxLength": null
+    }
+  },
+  {
+    "name": "shippingSector",
+    "label": "Shipping Sector",
+    "type": "integer",
+    "format": null,
+    "required": false,
+    "editable": true,
+    "nullable": true,
+    "picklist": null,
+    "relation": null,
+    "vtiger": {
+      "field": null,
+      "block": "Address Information",
+      "sequence": 16,
+      "maxLength": null
+    }
+  }
+]
